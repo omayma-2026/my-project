@@ -3,41 +3,44 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime
 
 # -------------------------------------------------------------
-# CONFIGURATION DE LA PAGE & DESIGN PROFESSIONNEL
+# CONFIGURATION DE LA PAGE
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="AuditCore - System d'Audit Interne & Governance",
+    page_title="Audit & Risk Center",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS pour un look moderne / corporate
+# Custom CSS pour reproduire exactement les cartes KPI blanches
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 26px;
-        font-weight: bold;
-        color: #1E3A8A;
-        border-bottom: 2px solid #1E3A8A;
-        padding-bottom: 10px;
-        margin-bottom: 20px;
+    .kpi-card {
+        background-color: #FFFFFF;
+        border-radius: 10px;
+        padding: 15px 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        border: 1px solid #E2E8F0;
+        margin-bottom: 10px;
     }
-    .metric-card {
-        background-color: #F8FAFC;
-        border-radius: 8px;
-        padding: 15px;
-        border-left: 5px solid #1E3A8A;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    .kpi-title {
+        font-size: 13px;
+        color: #64748B;
+        margin-bottom: 5px;
+        font-weight: 500;
+    }
+    .kpi-value {
+        font-size: 28px;
+        font-weight: bold;
+        color: #1E293B;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# CHARGEMENT & NETTOYAGE DES DONNÉES
+# CHARGEMENT DES DONNÉES
 # -------------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -62,219 +65,164 @@ try:
     proc_name = col_proc[0] if col_proc else None
     code_name = col_code[0] if col_code else df.columns[0]
 
+    # Nettoyage et typage numérique
+    df["Criticite_Num"] = pd.to_numeric(df[crit_name], errors='coerce')
+    df["DMR_Num"] = pd.to_numeric(df[dmr_name], errors='coerce')
+    if df["DMR_Num"].max() > 1:
+        df["DMR_Num"] = df["DMR_Num"] / 100
+
+    df["Score_Priorite"] = df["Criticite_Num"] * (1 - df["DMR_Num"])
+
     # -------------------------------------------------------------
-    # SIDEBAR & FILTRES DE PILOTAGE
+    # SIDEBAR
     # -------------------------------------------------------------
-    st.sidebar.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=70)
-    st.sidebar.title(" AuditCore v2.4")
-    st.sidebar.caption("Système de Management des Risques & Audit Interne")
+    st.sidebar.markdown("### 🛡️ Audit & Risk Center")
     st.sidebar.markdown("---")
 
-    st.sidebar.subheader("🔍 Filtres d'Analyse")
-    
+    # Profil Utilisateur
+    st.sidebar.markdown("**👤 Profil Utilisateur**")
+    role = st.sidebar.selectbox("Rôle", ["Auditeur Senior", "Chef de Mission", "Directeur Audit", "Risk Manager"], label_visibility="collapsed")
+    st.sidebar.markdown("Nom de l'utilisateur")
+    user_name = st.sidebar.text_input("Nom", value="Auditeur_1", label_visibility="collapsed")
+
+    st.sidebar.markdown("---")
+
+    # Menu Principal
+    st.sidebar.markdown("**📌 Menu Principal**")
+    menu = st.sidebar.radio(
+        "Navigation",
+        [
+            "📊 Dashboard & Visualisation",
+            "📝 Saisie & Simulation",
+            "📜 Historique des Actions",
+            "🔐 Gestion des Accès"
+        ],
+        label_visibility="collapsed"
+    )
+
+    st.sidebar.markdown("---")
+
+    # Filtres
+    st.sidebar.markdown("**🔍 Filtres**")
     if proc_name:
         processus_list = df[proc_name].dropna().unique().tolist()
-        selected_proc = st.sidebar.multiselect("Processus Métier", options=processus_list, default=processus_list)
-        df_filtered = df[df[proc_name].isin(selected_proc)] if selected_proc else df.copy()
+        selected_proc = st.sidebar.multiselect("Processus", options=processus_list, default=processus_list)
+        if selected_proc:
+            df_filtered = df[df[proc_name].isin(selected_proc)]
+        else:
+            df_filtered = df.copy()
     else:
         df_filtered = df.copy()
 
-    # Filter par niveau de zone si disponible
-    if zone_name:
-        zones_list = df[zone_name].dropna().unique().tolist()
-        selected_zones = st.sidebar.multiselect("Zones de Risque", options=zones_list, default=zones_list)
-        df_filtered = df_filtered[df_filtered[zone_name].isin(selected_zones)] if selected_zones else df_filtered
-
-    st.sidebar.markdown("---")
-    st.sidebar.info(f"📌 **{len(df_filtered)}** risques sélectionnés sur un total de **{len(df)}**.")
-
     # -------------------------------------------------------------
-    # HEADER PRINCIPAL & METRIQUES RH / AUDIT
+    # PAGE 1 : DASHBOARD & VISUALISATION
     # -------------------------------------------------------------
-    st.markdown('<div class="main-header">🛡️ Plateforme Décisionnelle d\'Audit Interne & Cartographie des Risques</div>', unsafe_allow_html=True)
+    if "Dashboard" in menu:
+        st.title("📊 Dashboard Interactif de la Cartographie des Risques")
+        st.caption("Plateforme décisionnelle d'audit interne et d'évaluation des contrôles")
 
-    # Calculs statistiques
-    total_risques = len(df_filtered)
-    crit_series = pd.to_numeric(df_filtered[crit_name], errors='coerce')
-    crit_moyenne = crit_series.mean()
-    
-    dmr_series = pd.to_numeric(df_filtered[dmr_name], errors='coerce')
-    if dmr_series.max() > 1:
-        dmr_series_norm = dmr_series / 100
-    else:
-        dmr_series_norm = dmr_series
-    dmr_moyen = dmr_series_norm.mean()
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    # Risques zone D / Très élevés
-    if zone_name:
-        risques_crit = len(df_filtered[df_filtered[zone_name].astype(str).str.contains("Zone D|Traitement|D", case=False, na=False)])
-    else:
-        risques_crit = len(df_filtered[crit_series >= 12])
+        # Calcul des KPI
+        total_risques = len(df_filtered)
+        crit_moyenne = df_filtered["Criticite_Num"].mean()
+        score_max = df_filtered["Score_Priorite"].max()
+        dmr_moyen = df_filtered["DMR_Num"].mean()
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("📊 Total Risques Identifiés", total_risques)
-    col2.metric("⚡ Criticité Nette Moyenne", f"{crit_moyenne:.2f}" if not np.isnan(crit_moyenne) else "N/A")
-    col3.metric("🚨 Risques Critiques (Zone D)", risques_crit, delta=f"{(risques_crit/total_risques*100):.1f}% du portefeuille" if total_risques > 0 else "0%")
-    col4.metric("🛡️ Efficacité Contrôle (DMR)", f"{dmr_moyen*100:.1f}%" if not np.isnan(dmr_moyen) else "N/A")
+        if zone_name:
+            zone_d_count = len(df_filtered[df_filtered[zone_name].astype(str).str.contains("Zone D|Traitement|D", case=False, na=False)])
+        else:
+            zone_d_count = len(df_filtered[df_filtered["Criticite_Num"] >= 12])
 
-    st.markdown("---")
+        # Affichage des 5 Cartes KPI b design identique
+        kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
 
-    # -------------------------------------------------------------
-    # ONGLETS DE NAVIGATION PROFESSIONNELLE (TABS)
-    # -------------------------------------------------------------
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Cartographie & Matrice 4x4", 
-        "🎯 Priorisation du Plan d'Audit", 
-        "🧪 Simulateur de Contrôle (What-If)", 
-        "📝 Plan d'Action & Recommandations"
-    ])
+        with kpi1:
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">Risques Totaux</div><div class="kpi-value">{total_risques}</div></div>', unsafe_allow_html=True)
+        with kpi2:
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">Criticité Nette Moyenne</div><div class="kpi-value">{crit_moyenne:.2f}</div></div>', unsafe_allow_html=True)
+        with kpi3:
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">Score Priorité Max</div><div class="kpi-value">{score_max:.2f}</div></div>', unsafe_allow_html=True)
+        with kpi4:
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">DMR Moyen</div><div class="kpi-value">{dmr_moyen*100:.1f}%</div></div>', unsafe_allow_html=True)
+        with kpi5:
+            st.markdown(f'<div class="kpi-card"><div class="kpi-title">Zone D (Critique)</div><div class="kpi-value">{zone_d_count}</div></div>', unsafe_allow_html=True)
 
-    # -------------------------------------------------------------
-    # TAB 1 : MATRICE 4x4 & DISTRIBUTION
-    # -------------------------------------------------------------
-    with tab1:
-        c1, c2 = st.columns([2, 1])
+        st.markdown("<br>", unsafe_allow_html=True)
 
-        with c1:
-            st.subheader("Matrice des Actions (Degré de Contrôle vs Degré de Criticité)")
-            
-            x_bins = [0, 4, 8, 12, 16]
-            x_labels = ["Faible [0-4[", "Moyen [4-8[", "Significatif [8-12[", "Elevé [12-16]"]
-            y_bins = [0, 0.25, 0.50, 0.75, 1.0]
-            y_labels = ["Satisfaisant ≤100%", "Correcte ≤75%", "Partiel ≤50%", "Faible ≤25%"]
+        # Section Graphiques : Pie / Donut Chart & Top 10 Bar Chart
+        col_left, col_right = st.columns([1, 1.2])
 
-            df_matrix = df_filtered.copy()
-            df_matrix["Criticite_Num"] = pd.to_numeric(df_matrix[crit_name], errors='coerce')
-            df_matrix["DMR_Num"] = pd.to_numeric(df_matrix[dmr_name], errors='coerce')
-            if df_matrix["DMR_Num"].max() > 1:
-                df_matrix["DMR_Num"] = df_matrix["DMR_Num"] / 100
-
-            df_matrix["Cat_Criticite"] = pd.cut(df_matrix["Criticite_Num"], bins=x_bins, labels=x_labels, include_lowest=True)
-            df_matrix["Cat_Controle"] = pd.cut(df_matrix["DMR_Num"], bins=y_bins, labels=y_labels, include_lowest=True)
-
-            matrix_text = np.empty((4, 4), dtype=object)
-            for i, y_lab in enumerate(reversed(y_labels)):
-                for j, x_lab in enumerate(x_labels):
-                    sub_df = df_matrix[(df_matrix["Cat_Controle"] == y_lab) & (df_matrix["Cat_Criticite"] == x_lab)]
-                    codes = sub_df[code_name].astype(str).tolist()
-                    matrix_text[i, j] = ", ".join(codes) if codes else "-"
-
-            colorscale = [
-                [0.0, "#99C2A2"], # Vert A
-                [0.33, "#F9E79F"], # Jaune B
-                [0.66, "#F1948A"], # Rose C
-                [1.0, "#B03A2E"]  # Rouge D
-            ]
-            z_values = [[2, 2, 3, 3], [1, 2, 2, 3], [0, 1, 1, 2], [0, 0, 1, 2]]
-
-            fig_matrix = go.Figure(data=go.Heatmap(
-                z=z_values,
-                x=x_labels,
-                y=list(reversed(y_labels)),
-                text=matrix_text,
-                texttemplate="%{text}",
-                textfont={"size": 10, "color": "black"},
-                colorscale=colorscale,
-                showscale=False
-            ))
-
-            fig_matrix.update_layout(
-                xaxis_title="DEGRÉ DE CRITICITÉ",
-                yaxis_title="DEGRÉ DE CONTRÔLE (DMR)",
-                height=500,
-                margin=dict(l=20, r=20, t=20, b=20)
-            )
-            st.plotly_chart(fig_matrix, use_container_width=True)
-
-        with c2:
-            st.subheader("Répartition par Zone")
+        with col_left:
+            st.subheader("🎯 Répartition par Zone d'Action")
             if zone_name:
-                zone_counts = df_filtered[zone_name].value_counts().reset_index()
-                zone_counts.columns = ['Zone', 'Nombre']
-                fig_pie = px.pie(zone_counts, values='Nombre', names='Zone', hole=0.4,
-                                 color_discrete_sequence=['#B03A2E', '#F1948A', '#F9E79F', '#99C2A2'])
-                fig_pie.update_layout(height=450, showlegend=True)
+                df_pie = df_filtered[zone_name].value_counts().reset_index()
+                df_pie.columns = ['Zone', 'Nombre']
+                
+                # Couleurs identiques
+                color_map = {
+                    "Zone D - Traitement Prioritaire": "#B03A2E",
+                    "Zone A - Optimisation": "#27AE60",
+                    "Zone C - Surveillance": "#E67E22",
+                    "Zone B - Vigilance": "#2980B9"
+                }
+
+                fig_pie = px.pie(
+                    df_pie, 
+                    values='Nombre', 
+                    names='Zone', 
+                    hole=0.5,
+                    color='Zone',
+                    color_discrete_map=color_map
+                )
+                fig_pie.update_traces(textinfo='percent', textposition='inside')
+                fig_pie.update_layout(
+                    height=420,
+                    legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.05),
+                    margin=dict(l=10, r=10, t=20, b=20)
+                )
                 st.plotly_chart(fig_pie, use_container_width=True)
             else:
-                st.write("Information de zone non disponible.")
+                st.info("Colonne de Zone non spécifiée.")
 
-    # -------------------------------------------------------------
-    # TAB 2 : SCORE DE PRIORISATION & EXPORT
-    # -------------------------------------------------------------
-    with tab2:
-        st.subheader("🎯 Priorisation Mathématique des Missions d'Audit")
-        st.write("Le score d'exposition globale est calculé via la formule actuarielle : **$Score = Criticité \\times (1 - DMR)$**")
-
-        df_priorite = df_filtered.copy()
-        df_priorite["Criticite_Num"] = pd.to_numeric(df_priorite[crit_name], errors='coerce')
-        df_priorite["DMR_Num"] = pd.to_numeric(df_priorite[dmr_name], errors='coerce')
-        if df_priorite["DMR_Num"].max() > 1:
-            df_priorite["DMR_Num"] = df_priorite["DMR_Num"] / 100
-
-        df_priorite["Score Priorité"] = df_priorite["Criticite_Num"] * (1 - df_priorite["DMR_Num"])
-        df_priorite["Score Priorité"] = df_priorite["Score Priorité"].round(2)
-        df_priorite = df_priorite.sort_values(by="Score Priorité", ascending=False)
-
-        # Affichage du tableau interactif
-        st.dataframe(
-            df_priorite.style.background_gradient(cmap="Reds", subset=["Score Priorité"]),
-            use_container_width=True,
-            height=400
-        )
-
-        # Export CSV pour le Comité d'Audit
-        csv = df_priorite.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Télécharger le Rapport de Priorisation (CSV / Excel)",
-            data=csv,
-            file_name=f"Rapport_Audit_Interne_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-
-    # -------------------------------------------------------------
-    # TAB 3 : SIMULATEUR IMPACT "WHAT-IF"
-    # -------------------------------------------------------------
-    with tab3:
-        st.subheader("🧪 Simulation d'Amélioration du Contrôle Interne (Analyse Sensibilité)")
-        st.write("Évaluez l'impact d'un renforcement des contrôles sur le niveau de risque global avant d'investir des ressources.")
-
-        boost_dmr = st.slider("Augmentation simulée de l'efficacité des contrôles (+% DMR)", 0, 50, 15, step=5)
-        
-        df_sim = df_filtered.copy()
-        df_sim["Criticite_Num"] = pd.to_numeric(df_sim[crit_name], errors='coerce')
-        df_sim["DMR_Num"] = pd.to_numeric(df_sim[dmr_name], errors='coerce')
-        if df_sim["DMR_Num"].max() > 1:
-            df_sim["DMR_Num"] = df_sim["DMR_Num"] / 100
-
-        df_sim["DMR_Simulé"] = np.minimum(1.0, df_sim["DMR_Num"] + (boost_dmr / 100))
-        df_sim["Score_Initial"] = df_sim["Criticite_Num"] * (1 - df_sim["DMR_Num"])
-        df_sim["Score_Simulé"] = df_sim["Criticite_Num"] * (1 - df_sim["DMR_Simulé"])
-
-        score_init_moyen = df_sim["Score_Initial"].mean()
-        score_sim_moyen = df_sim["Score_Simulé"].mean()
-        reduction_pct = ((score_init_moyen - score_sim_moyen) / score_init_moyen * 100) if score_init_moyen > 0 else 0
-
-        sc1, sc2, sc3 = st.columns(3)
-        sc1.metric("Score Risque Moyen Actuel", f"{score_init_moyen:.2f}")
-        sc2.metric("Score Risque Après Simulation", f"{score_sim_moyen:.2f}", delta=f"-{reduction_pct:.1f}% Risque", delta_color="inverse")
-        sc3.metric("Gain de Maîtrise Global", f"+{boost_dmr}% DMR")
-
-    # -------------------------------------------------------------
-    # TAB 4 : GESTION DES RECOMMANDATIONS & SUIVI
-    # -------------------------------------------------------------
-    with tab4:
-        st.subheader("📝 Registre des Recommandations & Suivi des Actions")
-        
-        with st.form("form_action"):
-            col_a, col_b = st.columns(2)
-            rec_code = col_a.text_input("Code Risque Concerné", "R01")
-            rec_resp = col_b.text_input("Responsable Action", "Direction Financière / Audit")
-            rec_desc = st.text_area("Recommandation d'Audit / Action Corrective", "")
-            rec_statut = st.selectbox("Statut initial", ["Non commencé", "En cours", "Clôturé"])
+        with col_right:
+            st.subheader("🔥 Top 10 Risques Prioritaires (Scoring)")
             
-            submitted = st.form_submit_button("➕ Ajouter la Recommandation au Registre")
-            if submitted:
-                st.success(f"Recommandation enregistrée pour le risque {rec_code} !")
+            top10 = df_filtered.sort_values(by="Score_Priorite", ascending=True).tail(10)
+
+            fig_bar = px.bar(
+                top10,
+                x="Score_Priorite",
+                y=code_name,
+                orientation='h',
+                color="Score_Priorite",
+                color_continuous_scale=["#FADBD8", "#E74C3C", "#78281F"],
+                text="Score_Priorite"
+            )
+            fig_bar.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+            fig_bar.update_layout(
+                xaxis_title="Score_Priorite",
+                yaxis_title="code",
+                height=420,
+                coloraxis_showscale=True,
+                margin=dict(l=10, r=10, t=20, b=20)
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+    # -------------------------------------------------------------
+    # PAGES SECONDAIRES
+    # -------------------------------------------------------------
+    elif "Saisie" in menu:
+        st.title("📝 Saisie & Simulation des Contrôles")
+        st.write("Espace de simulation d'impact et de mise à jour des données.")
+
+    elif "Historique" in menu:
+        st.title("📜 Historique des Actions & Recommandations")
+        st.write("Suivi des missions d'audit passées et état d'avancement.")
+
+    elif "Gestion" in menu:
+        st.title("🔐 Gestion des Accès & Habilitations")
+        st.write("Module de gestion des utilisateurs et droits d'accès.")
 
 except Exception as e:
-    st.error(f"Une erreur est survenue lors de l'exécution : {e}")
+    st.error(f"Erreur de chargement : {e}")
