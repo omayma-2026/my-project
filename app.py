@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
+import os
 
 # ---------------------------------------------------------
 # 1. CONFIGURATION DE LA PAGE & STYLE INSTITUTIONNEL SAAS
@@ -41,30 +42,43 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. INITIALISATION DU SESSION STATE & HISTORIQUE
+# 2. GESTION DE LA PERSISTANCE (FICHIER EXCEL LOCAL POUR PLANS D'ACTION)
 # ---------------------------------------------------------
+EXCEL_ACTIONS_PATH = "plans_actions_persistant.xlsx"
+
+def load_persisted_actions():
+    if os.path.exists(EXCEL_ACTIONS_PATH):
+        try:
+            df_act = pd.read_excel(EXCEL_ACTIONS_PATH)
+            return df_act
+        except Exception:
+            pass
+    return pd.DataFrame(columns=[
+        "ID", "Processus", "Risque associé", "Recommandation",
+        "Responsable", "Priorité", "Date création",
+        "Échéance", "Statut", "Date clôture", "Commentaires"
+    ])
+
+def save_persisted_actions(df_act):
+    df_act.to_excel(EXCEL_ACTIONS_PATH, index=False)
+
+if "plan_actions" not in st.session_state:
+    st.session_state.plan_actions = load_persisted_actions()
+
 if 'users_db' not in st.session_state:
     st.session_state['users_db'] = pd.DataFrame([
         {"ID": 1, "Nom": "Auditeur Principal", "Email": "audit@ormva-tf.ma", "Rôle": "Auditeur Interne", "Statut": "Actif"},
         {"ID": 2, "Nom": "Responsable P9", "Email": "p9@ormva-tf.ma", "Rôle": "Responsable Processus", "Statut": "Actif"}
     ])
 
-if "plan_actions" not in st.session_state:
-    st.session_state.plan_actions = pd.DataFrame(columns=[
-        "ID", "Processus", "Risque associé", "Recommandation",
-        "Responsable", "Priorité", "Date création",
-        "Échéance", "Statut", "Date clôture", "Commentaires"
-    ])
-
 if "audit_history" not in st.session_state:
-    # Historique initial interactif
     st.session_state.audit_history = pd.DataFrame([
         {
             "Date & Heure": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Utilisateur": "Auditeur Principal",
             "Rôle": "Auditeur Interne",
             "Action": "Initialisation du système",
-            "Détails": "Chargement de la cartographie des 159 risques ORMVA-TF."
+            "Détails": "Chargement de la cartographie des risques ORMVA-TF."
         }
     ])
 
@@ -82,13 +96,13 @@ def log_action(user, role, action, details):
     )
 
 # ---------------------------------------------------------
-# 3. CHARGEMENT DES DONNÉES OFFICIELLES
+# 3. CHARGEMENT DES DONNÉES OFFICIELLES (projet1.xlsx / cartographie)
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
-    for filename in ['cartographie_analysee_complete.xlsx', 'data_reel.xlsx', 'projet1.xlsx']:
+    for filename in ['projet1.xlsx', 'cartographie_analysee_complete.xlsx', 'data_reel.xlsx']:
         try:
-            df = pd.read_excel(filename, sheet_name='Details_Risques' if 'cartographie' in filename else 0)
+            df = pd.read_excel(filename, sheet_name=0)
             return df
         except Exception:
             continue
@@ -121,7 +135,7 @@ PRIORITES = ["Faible", "Moyenne", "Haute", "Critique"]
 
 def _next_id():
     df = st.session_state.plan_actions
-    return 1 if df.empty else int(df["ID"].max()) + 1
+    return 1 if df.empty else int(pd.to_numeric(df["ID"], errors='coerce').max()) + 1
 
 # ---------------------------------------------------------
 # 4. SIDEBAR & NAVIGATION INTERACTIVE
@@ -276,64 +290,121 @@ elif menu == "🔥 Top 10 Risques & Scoring":
         st.plotly_chart(fig_top, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 5: SUIVI DES PLANS D'ACTION (AVEC INTERACTIONS)
+# MODULE 5: SUIVI DES PLANS D'ACTION (PERSISTANT & DÉTAILLÉ)
 # ---------------------------------------------------------
 elif menu == "📋 Suivi des Plans d'Action":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Plans d'Action</b></div>""", unsafe_allow_html=True)
     st.markdown("## 📋 Suivi des Plans d'Action & Recommandations d'Audit")
 
-    with st.expander("➕ Ajouter une nouvelle recommandation interactive", expanded=True):
+    with st.expander("➕ Ajouter une nouvelle recommandation", expanded=False):
         with st.form("form_pa", clear_on_submit=True):
             col1, col2 = st.columns(2)
-            proc_list = sorted(df_original['processus'].dropna().unique()) if 'processus' in df_original.columns else ["P9"]
+            proc_list = sorted(df_original['processus'].dropna().unique()) if 'processus' in df_original.columns else ["P9 - Achat et approvisionnement"]
             with col1:
-                processus = st.selectbox("Processus", proc_list)
-                risque = st.text_input("Risque associé (ex: R46)")
+                processus = st.selectbox("Processus concerné", proc_list)
+                risque = st.text_input("Risque associé (ex: R46 / P9.SP1.R2)")
                 responsable = st.text_input("Responsable audité")
-            with col2:
                 priorite = st.selectbox("Priorité", PRIORITES)
-                echeance = st.date_input("Échéance", min_value=date.today())
+            with col2:
+                date_creation = st.date_input("Date de création", value=date.today())
+                echeance = st.date_input("Date d'échéance", min_value=date.today())
                 statut = st.selectbox("Statut initial", STATUTS)
 
             recommandation = st.text_area("Recommandation / Action corrective")
+            commentaires = st.text_area("Commentaires (optionnel)")
+
             submitted = st.form_submit_button("Enregistrer la Recommandation")
             if submitted:
-                if not risque or not recommandation:
-                    st.error("Veuillez remplir les champs obligatoires.")
+                if not risque or not recommandation or not responsable:
+                    st.error("Veuillez remplir les champs obligatoires : Risque associé, Responsable et Recommandation.")
                 else:
                     new_row = {
-                        "ID": _next_id(), "Processus": processus, "Risque associé": risque,
-                        "Recommandation": recommandation, "Responsable": responsable, "Priorité": priorite,
-                        "Date création": date.today(), "Échéance": echeance, "Statut": statut,
-                        "Date clôture": None, "Commentaires": ""
+                        "ID": _next_id(),
+                        "Processus": processus,
+                        "Risque associé": risque,
+                        "Recommandation": recommandation,
+                        "Responsable": responsable,
+                        "Priorité": priorite,
+                        "Date création": str(date_creation),
+                        "Échéance": str(echeance),
+                        "Statut": statut,
+                        "Date clôture": str(date.today()) if statut == "Clôturé" else "",
+                        "Commentaires": commentaires
                     }
-                    st.session_state.plan_actions = pd.concat([st.session_state.plan_actions, pd.DataFrame([new_row])], ignore_index=True)
-                    log_action("Auditeur Principal", "Auditeur Interne", "Ajout Plan d'Action", f"Création action pour risque {risque} ({processus}).")
-                    st.success("Plan d'action enregistré et journalisé avec succès ! ✅")
+                    st.session_state.plan_actions = pd.concat(
+                        [st.session_state.plan_actions, pd.DataFrame([new_row])],
+                        ignore_index=True
+                    )
+                    save_persisted_actions(st.session_state.plan_actions)
+                    log_action("Auditeur Principal", "Auditeur Interne", "Ajout Plan d'Action", f"Création action #{new_row['ID']} pour risque {risque}.")
+                    st.success("Plan d'action enregistré, persisté et journalisé avec succès ! ✅")
                     st.rerun()
 
     pa_df = st.session_state.plan_actions.copy()
     if not pa_df.empty:
-        st.markdown("### 🗂️ Registre Dynamique des Plans d'Action")
-        st.dataframe(pa_df, use_container_width=True)
+        # Calcul automatique des retards
+        today_ts = pd.Timestamp(date.today())
+        pa_df["Échéance_dt"] = pd.to_datetime(pa_df["Échéance"], errors='coerce')
+        pa_df["En retard"] = (pa_df["Échéance_dt"] < today_ts) & (pa_df["Statut"] != "Clôturé")
+
+        total_actions = len(pa_df)
+        nb_cloturees = (pa_df["Statut"] == "Clôturé").sum()
+        taux_cloture = round((nb_cloturees / total_actions) * 100, 1) if total_actions > 0 else 0.0
+        nb_retard = pa_df["En retard"].sum()
+        nb_cours = (pa_df["Statut"] == "En cours").sum()
+
+        # KPIs en haut de page
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Nombre total d'actions", total_actions)
+        k2.metric("Taux de clôture", f"{taux_cloture}%")
+        k3.metric("Actions en retard", int(nb_retard))
+        k4.metric("Actions en cours", int(nb_cours))
+
+        st.write("")
+        # Graphiques analytiques
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            fig_statut = px.pie(pa_df, names="Statut", title="Répartition des actions par statut", hole=0.45)
+            fig_statut.update_layout(plot_bgcolor='#FFFFFF', height=350)
+            st.plotly_chart(fig_statut, use_container_width=True)
+        with col_g2:
+            if "Responsable" in pa_df.columns:
+                resp_df = pa_df.groupby("Responsable").size().reset_index(name="Nombre")
+                fig_resp = px.bar(resp_df, x="Responsable", y="Nombre", title="Répartition des actions par responsable", color="Nombre", color_continuous_scale="Greens")
+                fig_resp.update_layout(plot_bgcolor='#FFFFFF', height=350)
+                st.plotly_chart(fig_resp, use_container_width=True)
+
+        st.markdown("### 🗂️ Tableau Récapitulatif des Plans d'Action")
         
-        # Section interactive pour modifier le statut d'un plan d'action
-        st.markdown("### ✏️ Modifier le Statut d'une Action")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1:
-            sel_id = st.selectbox("ID de l'Action", pa_df["ID"])
-        with col_m2:
-            n_statut = st.selectbox("Nouveau Statut", STATUTS)
-        with col_m3:
+        # Mise en évidence visuelle des lignes en retard
+        def highlight_retard(row):
+            if row.get("En retard", False):
+                return ['background-color: #FDECEA; color: #990000; font-weight: 600;' for _ in row]
+            return ['' for _ in row]
+
+        display_df = pa_df.drop(columns=["Échéance_dt", "En retard"], errors='ignore')
+        st.dataframe(display_df.style.apply(highlight_retard, axis=1), use_container_width=True)
+
+        st.markdown("### ✏️ Mettre à jour le statut d'une action existante")
+        col_u1, col_u2, col_u3 = st.columns(3)
+        with col_u1:
+            selected_id = st.selectbox("Sélectionner l'ID de l'action", pa_df["ID"].tolist())
+        with col_u2:
+            nouveau_statut = st.selectbox("Nouveau statut", STATUTS)
+        with col_u3:
             st.write("")
             st.write("")
             if st.button("Mettre à jour le Statut"):
-                idx = st.session_state.plan_actions["ID"] == sel_id
-                st.session_state.plan_actions.loc[idx, "Statut"] = n_statut
-                if n_statut == "Clôturé":
-                    st.session_state.plan_actions.loc[idx, "Date clôture"] = date.today()
-                log_action("Auditeur Principal", "Auditeur Interne", "Mise à jour Plan d'Action", f"Action #{sel_id} passée au statut : {n_statut}.")
-                st.success(f"Action #{sel_id} mise à jour avec succès !")
+                idx = st.session_state.plan_actions["ID"] == selected_id
+                st.session_state.plan_actions.loc[idx, "Statut"] = nouveau_statut
+                if nouveau_statut == "Clôturé":
+                    st.session_state.plan_actions.loc[idx, "Date clôture"] = str(date.today())
+                else:
+                    st.session_state.plan_actions.loc[idx, "Date clôture"] = ""
+                
+                save_persisted_actions(st.session_state.plan_actions)
+                log_action("Auditeur Principal", "Auditeur Interne", "Mise à jour Plan d'Action", f"Action #{selected_id} modifiée au statut : {nouveau_statut}.")
+                st.success(f"Action #{selected_id} mise à jour avec succès et enregistrée ! ✅")
                 st.rerun()
     else:
         st.info("Aucun plan d'action enregistré pour le moment. Utilisez le formulaire ci-dessus pour en ajouter.")
@@ -382,7 +453,7 @@ elif menu == "👥 Gestion des Accès (RBAC)":
 # ---------------------------------------------------------
 elif menu == "📋 Registre Détaillé":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Base de Données</b></div>""", unsafe_allow_html=True)
-    st.subheader("📑 Registre Complet des 159 Risques")
+    st.subheader("📑 Registre Complet des Risques")
     if not df.empty:
         search = st.text_input("🔍 Rechercher dans le registre :", "")
         filtered = df[df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)] if search else df
