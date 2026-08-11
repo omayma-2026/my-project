@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 
 # ---------------------------------------------------------
 # 1. CONFIGURATION DE LA PAGE & STYLE INSTITUTIONNEL
@@ -40,28 +39,30 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. CHARGEMENT DES DONNÉES RÉELLES DEPUIS LES FICHIERS
+# 2. CHARGEMENT AUTOMATIQUE DES FICHIERS LOCAUX
 # ---------------------------------------------------------
 @st.cache_data
-def load_data():
+def load_all_data():
+    df_carto, df_score, df_var = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    
     try:
         df_carto = pd.read_excel('cartographie_analysee_complete.xlsx', sheet_name='Details_Risques')
-    except Exception:
-        df_carto = pd.DataFrame()
+    except Exception as e:
+        st.sidebar.error(f"Erreur Cartographie: {e}")
 
     try:
         df_score = pd.read_excel('indicateurs_powerbi_v2.xlsx', sheet_name='Score_Priorite')
-    except Exception:
-        df_score = pd.DataFrame()
+    except Exception as e:
+        st.sidebar.error(f"Erreur Score: {e}")
 
     try:
         df_var = pd.read_excel('indicateurs_powerbi_v2.xlsx', sheet_name='VaR_TVaR')
-    except Exception:
-        df_var = pd.DataFrame()
-
+    except Exception as e:
+        st.sidebar.error(f"Erreur VaR: {e}")
+        
     return df_carto, df_score, df_var
 
-df_carto, df_score, df_var = load_data()
+df_carto, df_score, df_var = load_all_data()
 
 # ---------------------------------------------------------
 # 3. HEADER & NAVIGATION (SIDEBAR)
@@ -74,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.sidebar.title("🏢 Direction de l'Audit")
-st.sidebar.caption("Source : Fichiers Power BI & Cartographie Officielle")
+st.sidebar.success("✅ Fichiers détectés et chargés automatiquement !")
 
 menu = st.sidebar.radio(
     "Modules de la Plateforme :",
@@ -95,20 +96,26 @@ if menu == "🏠 Dashboard Exécutif":
     
     total_risks = len(df_carto) if not df_carto.empty else 0
     total_var = df_var['VaR_95'].sum() if not df_var.empty and 'VaR_95' in df_var.columns else 0.0
-    top_proc = df_score.sort_values('Score_Priorite_Audit', ascending=False).iloc[0]['Processus'] if not df_score.empty else "N/A"
+    
+    # Récupération sécurisée du processus prioritaire #1
+    if not df_score.empty and 'Score_Priorite_Audit' in df_score.columns:
+        top_proc_row = df_score.sort_values('Score_Priorite_Audit', ascending=False).iloc[0]
+        top_proc = str(top_proc_row['Processus'])
+    else:
+        top_proc = "N/A"
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Risques Cartographiés", f"{total_risks}", "Total Fichier Réel")
+    m1.metric("Risques Cartographiés", f"{total_risks}", "Base Officielle")
     m2.metric("VaR Globale (95%)", f"{total_var:,.1f} DH", "Modèle Stochastique")
-    m3.metric("Processus Prioritaire #1", f"{top_proc[:20]}...", "Top Score PFA")
-    m4.metric("Statut Système", "Opérationnel", "100% Connecté")
+    m3.metric("Processus Prioritaire #1", f"{top_proc[:25]}...", "Top Score PFA")
+    m4.metric("Statut Système", "Opérationnel", "Connecté Localement")
 
     st.write("")
     col_l, col_r = st.columns(2)
     
     with col_l:
         st.subheader("🎯 Score de Priorisation par Processus")
-        if not df_score.empty:
+        if not df_score.empty and 'Score_Priorite_Audit' in df_score.columns:
             fig_score = px.bar(
                 df_score.sort_values('Score_Priorite_Audit', ascending=True),
                 x='Score_Priorite_Audit', y='Processus', orientation='h',
@@ -118,7 +125,7 @@ if menu == "🏠 Dashboard Exécutif":
             fig_score.update_layout(height=400, yaxis={'categoryorder':'total ascending'}, plot_bgcolor='#FFFFFF')
             st.plotly_chart(fig_score, use_container_width=True)
         else:
-            st.warning("Données de score non disponibles.")
+            st.warning("Données de score indisponibles.")
 
     with col_r:
         st.subheader("📊 Répartition de l'Exposition VaR 95%")
@@ -130,17 +137,16 @@ if menu == "🏠 Dashboard Exécutif":
             fig_pie.update_layout(height=400, plot_bgcolor='#FFFFFF')
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.warning("Données VaR non disponibles.")
+            st.warning("Données VaR indisponibles.")
 
 # ---------------------------------------------------------
-# MODULE 2: MATRICE DES RISQUES (HEATMAP / ISHNAWER STYLE)
+# MODULE 2: MATRICE DES RISQUES (HEATMAP)
 # ---------------------------------------------------------
 elif menu == "⚠️ Matrice des Risques (Heatmap)":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice de Criticité Brute (Heatmap)</b></div>""", unsafe_allow_html=True)
     st.subheader("🗺️ Matrice d'Évaluation des Risques (Probabilité vs Gravité)")
 
     if not df_carto.empty and 'prob' in df_carto.columns and 'grav' in df_carto.columns:
-        # Création de la matrice croisée (Pivot Table)
         matrix_df = pd.crosstab(df_carto['grav'], df_carto['prob'])
         
         fig_matrix = px.imshow(
@@ -154,7 +160,7 @@ elif menu == "⚠️ Matrice des Risques (Heatmap)":
         fig_matrix.update_layout(title="Concentration des Risques dans la Matrice Institutionnelle", height=500, plot_bgcolor='#FFFFFF')
         st.plotly_chart(fig_matrix, use_container_width=True)
     else:
-        st.warning("Données de probabilité et gravité introuvables dans le fichier.")
+        st.warning("Colonnes 'prob' ou 'grav' introuvables dans le fichier de cartographie.")
 
 # ---------------------------------------------------------
 # MODULE 3: PRIORISATION & SCORING
@@ -164,7 +170,7 @@ elif menu == "🎯 Priorisation & Scoring":
     st.subheader("📋 Tableau Officiel de Priorisation des Missions d'Audit")
 
     if not df_score.empty:
-        st.dataframe(df_score[['Processus', 'Criticite_Nette_Somme', 'Nb_Risques_Critiques', 'VaR_95', 'Score_Priorite_Audit', 'Rang_Quantifie']], use_container_width=True, height=450)
+        st.dataframe(df_score, use_container_width=True, height=450)
     else:
         st.warning("Aucun score de priorisation trouvé.")
 
