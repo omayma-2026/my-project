@@ -61,98 +61,102 @@ st.markdown("""
         font-weight: bold;
         color: var(--primary-color);
     }
-
-    .status-badge-valide {
-        background-color: #D4EDDA;
-        color: #155724;
-        padding: 3px 8px;
-        border-radius: 12px;
-        font-size: 11px;
-        font-weight: bold;
-    }
-
-    .status-badge-attente {
-        background-color: #FFF3CD;
-        color: #856404;
-        padding: 3px 8px;
-        border-radius: 12px;
-        font-size: 11px;
-        font-weight: bold;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. MOCK ENGINE & SIMULATION DES DONNÉES RÉELLES ORMVA-TF
+# 2. CHARGEMENT ET PRÉPARATION DES DONNÉES
 # -------------------------------------------------------------
 @st.cache_data
-def get_initial_dataset():
-    # Génération contrôlée basée exactement sur les résultats ORMVA-TF
-    np.random.seed(42)
-    processus_list = [
-        "P1 - Aides et incitations financières",
-        "P2 - Gestion de production agricole",
-        "P3 - Aménagement",
-        "P4 - Gestion des réseaux d'irrigation",
-        "P5 - Logistique",
-        "P6 - Juridique",
-        "P7 - Gestion budgétaire & comptable",
-        "P8 - Informatique",
-        "P9 - Achat et approvisionnement",
-        "P10 - Ressources humaines",
-        "P11 - Audit interne",
-        "P12 - Direction et pilotage"
-    ]
-    
-    records = []
-    id_counter = 1
-    
-    # Répartition des 159 risques
-    counts = [12, 20, 10, 15, 10, 8, 22, 12, 25, 12, 5, 8]
-    
-    for proc_idx, proc in enumerate(processus_list):
-        n_risques = counts[proc_idx]
-        for i in range(n_risques):
-            cb = np.random.randint(4, 17)
-            dmr = round(np.random.uniform(0.2, 0.85), 2)
-            cn = round(cb * (1 - dmr), 2)
-            
-            zone = "Zone A - Optimisation"
-            if cn >= 12:
-                zone = "Zone D - Traitement Prioritaire"
-            elif cn >= 8:
-                zone = "Zone C - Surveillance"
-            elif cn >= 4:
-                zone = "Zone B - Vigilance"
+def load_and_prep_data():
+    try:
+        df = pd.read_excel("projet1.xlsx")
+        df.columns = df.columns.str.strip()
+        df = df.dropna(how='all')
+    except Exception:
+        # Jeu de secours si projet1.xlsx n'est pas trouvé
+        np.random.seed(42)
+        processus_list = [
+            "P1 - Aides et incitations financières", "P2 - Gestion de production agricole",
+            "P3 - Aménagement", "P4 - Gestion des réseaux d'irrigation", "P5 - Logistique",
+            "P6 - Juridique", "P7 - Gestion budgétaire & comptable", "P8 - Informatique",
+            "P9 - Achat et approvisionnement", "P10 - Ressources humaines",
+            "P11 - Audit interne", "P12 - Direction et pilotage"
+        ]
+        records = []
+        counts = [12, 20, 10, 15, 10, 8, 22, 12, 25, 12, 5, 8]
+        id_counter = 1
+        for p_idx, proc in enumerate(processus_list):
+            for i in range(counts[p_idx]):
+                cb = np.random.randint(2, 16)
+                dmr = round(np.random.uniform(0.1, 0.95), 2)
+                cn = round(cb * (1 - dmr), 2)
                 
-            records.append({
-                "id": id_counter,
-                "code_risque": f"R_{proc.split(' ')[0]}.{i+1:02d}",
-                "processus": proc,
-                "sous_processus": f"Sous-proc {i%3 + 1}",
-                "description": f"Risque opérationnel lié à {proc.split('-')[1].strip()}",
-                "cause": "Procédure obsolète / Absence de contrôle de niveau 2",
-                "consequence": "Pertes financières / Retard d'exécution",
-                "criticite_brute": cb,
-                "dmr": dmr,
-                "criticite_nette": cn,
-                "zone": zone,
-                "statut": "VALIDE",
-                "declared_by": "System_Import",
-                "created_at": "2026-01-15"
-            })
-            id_counter += 1
-            
-    df = pd.DataFrame(records)
+                if cn >= 12:
+                    zone = "Zone D - Traitement"
+                elif cn >= 8:
+                    zone = "Zone C - Surveillance"
+                elif cn >= 4:
+                    zone = "Zone B - Vigilance"
+                else:
+                    zone = "Zone A - Optimisation"
+
+                records.append({
+                    "id": id_counter,
+                    "code_risque": f"R{id_counter}",
+                    "processus": proc,
+                    "sous_processus": f"Sous-proc {i%3 + 1}",
+                    "description": f"Risque opérationnel sur {proc.split('-')[1].strip()}",
+                    "cause": "Procédure ou contrôle inadéquat",
+                    "consequence": "Impact financier ou délai",
+                    "criticite_brute": cb,
+                    "dmr": dmr,
+                    "criticite_nette": cn,
+                    "zone": zone,
+                    "statut": "VALIDE",
+                    "declared_by": "System_Import",
+                    "created_at": "2026-01-15"
+                })
+                id_counter += 1
+        df = pd.DataFrame(records)
+
+    # Normalisation des colonnes
+    col_crit = [c for c in df.columns if 'critic' in c.lower() or 'critité' in c.lower() or 'criticite' in c.lower()]
+    col_dmr = [c for c in df.columns if 'dmr' in c.lower() or 'maitrise' in c.lower()]
+    col_zone = [c for c in df.columns if 'zone' in c.lower() or 'action' in c.lower()]
+    col_proc = [c for c in df.columns if 'processus' in c.lower() or 'proc' in c.lower()]
+    col_code = [c for c in df.columns if 'code' in c.lower() or 'risque' in c.lower() or 'id' in c.lower()]
+
+    crit_name = col_crit[0] if col_crit else df.columns[1]
+    dmr_name = col_dmr[0] if col_dmr else df.columns[2]
+    zone_name = col_zone[0] if col_zone else "zone"
+    proc_name = col_proc[0] if col_proc else "processus"
+    code_name = col_code[0] if col_code else "code_risque"
+
+    df["Criticite_Num"] = pd.to_numeric(df[crit_name], errors='coerce')
+    df["DMR_Num"] = pd.to_numeric(df[dmr_name], errors='coerce')
+    if df["DMR_Num"].max() > 1:
+        df["DMR_Num"] = df["DMR_Num"] / 100
+
+    if "statut" not in df.columns:
+        df["statut"] = "VALIDE"
+    if "declared_by" not in df.columns:
+        df["declared_by"] = "System_Import"
+    if "created_at" not in df.columns:
+        df["created_at"] = "2026-01-15"
+
+    df["proc_col"] = df[proc_name]
+    df["code_col"] = df[code_name]
+    df["zone_col"] = df[zone_name] if zone_name in df.columns else "Zone A - Optimisation"
+
     return df
 
-# Initialisation de la Session State
 if "df_carto" not in st.session_state:
-    st.session_state.df_carto = get_initial_dataset()
+    st.session_state.df_carto = load_and_prep_data()
 
 if "audit_trail" not in st.session_state:
     st.session_state.audit_trail = [
-        {"date": "2026-08-01 09:00", "user": "Admin", "action": "Initialisation du système", "details": "Importation de 159 risques v1.0"},
+        {"date": "2026-08-01 09:00", "user": "Admin", "action": "Initialisation du système", "details": "Importation officielle des 159 risques v1.0"},
         {"date": "2026-08-05 14:20", "user": "Auditeur_Principal", "action": "Validation globale", "details": "Cartographie officielle validée"}
     ]
 
@@ -168,7 +172,6 @@ st.sidebar.caption("Système Décisionnel d'Audit Interne")
 
 st.sidebar.markdown("---")
 
-# Module Authentification / Rôle
 st.sidebar.subheader("👤 Profil & Accès")
 role_selected = st.sidebar.selectbox(
     "Changer de Rôle (Simulation RBAC):",
@@ -179,7 +182,6 @@ st.session_state.user_role = role_selected
 
 st.sidebar.markdown("---")
 
-# Menu de Navigation Principale
 menu = st.sidebar.radio(
     "Navigation System",
     [
@@ -195,7 +197,7 @@ menu = st.sidebar.radio(
 )
 
 # -------------------------------------------------------------
-# 4. MODULE 1: DASHBOARD PRINCIPAL
+# 4. MODULE 1: DASHBOARD PRINCIPAL (KPI, MATRICE & GRAPHIQUE CIRCULAIRE)
 # -------------------------------------------------------------
 if menu == "🏠 Dashboard":
     st.markdown('<div class="main-header">🏠 Dashboard Décisionnel d\'Audit Interne</div>', unsafe_allow_html=True)
@@ -203,16 +205,15 @@ if menu == "🏠 Dashboard":
     df = st.session_state.df_carto
     df_valid = df[df["statut"] == "VALIDE"]
     
-    # Calcul des métriques globales
+    # KPIs
     total_risques = len(df_valid)
-    nb_processus = df_valid["processus"].nunique()
-    crit_critiques = len(df_valid[df_valid["zone"].str.contains("Zone D")])
-    cn_moyenne = df_valid["criticite_nette"].mean()
-    dmr_moyen = df_valid["dmr"].mean()
-    var_95 = 4816.70 # Valeur théorique exacte de l'étude
+    nb_processus = df_valid["proc_col"].nunique()
+    crit_critiques = len(df_valid[df_valid["zone_col"].astype(str).str.contains("Zone D|Traitement", case=False, na=False)])
+    cn_moyenne = df_valid["Criticite_Num"].mean()
+    dmr_moyen = df_valid["DMR_Num"].mean()
+    var_95 = 4816.70
     attente_val = len(df[df["statut"] == "EN_ATTENTE"])
     
-    # Range 1: KPI Cards
     c1, c2, c3, c4 = st.columns(4)
     c1.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Risques Validés</div><div class="kpi-value">{total_risques}</div></div>', unsafe_allow_html=True)
     c2.markdown(f'<div class="kpi-card"><div class="kpi-title">Processus Couverts</div><div class="kpi-value">{nb_processus}</div></div>', unsafe_allow_html=True)
@@ -229,29 +230,103 @@ if menu == "🏠 Dashboard":
 
     st.markdown("---")
 
-    # Range 2: Visualisations
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
-        st.subheader(" Répartition par Zone d'Action")
-        zone_df = df_valid["zone"].value_counts().reset_index()
-        zone_df.columns = ["Zone", "Nombre"]
-        fig_pie = px.pie(
-            zone_df, values="Nombre", names="Zone", hole=0.4,
-            color_discrete_sequence=["#27AE60", "#D9534F", "#E67E22", "#2980B9"]
-        )
-        fig_pie.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_pie, use_container_width=True)
-        
-    with col_right:
-        st.subheader("🔥 Top Processus par Nb Risques Critiques")
-        crit_proc = df_valid[df_valid["zone"].str.contains("Zone D")]["processus"].value_counts().reset_index()
-        crit_proc.columns = ["Processus", "Nb Risques Critiques"]
-        fig_bar = px.bar(crit_proc, x="Nb Risques Critiques", y="Processus", orientation="h", color_discrete_sequence=["#1E4620"])
-        fig_bar.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig_bar, use_container_width=True)
+    # SECTION VISUELLE : MATRICE + GRAPHIQUE CIRCULAIRE (DONUT CHART)
+    col_left_visu, col_right_visu = st.columns([2, 1.2])
 
-    # Section Processus Prioritaires
+    with col_left_visu:
+        st.subheader("📊 Matrice des Actions (Eisenhower-Style)")
+        
+        x_bins = [0, 4, 8, 12, 16]
+        x_labels = ["Faible [0-4[", "Moyen [4-8[", "Significatif [8-12[", "Elevé [12-16]"]
+        y_bins = [0, 0.25, 0.50, 0.75, 1.0]
+        y_labels = ["Satisfaisant ≤100%", "Correcte ≤75%", "Partiel ≤50%", "Faible ≤25%"]
+
+        df_matrix = df_valid.copy()
+        df_matrix["Cat_Criticite"] = pd.cut(df_matrix["Criticite_Num"], bins=x_bins, labels=x_labels, include_lowest=True)
+        df_matrix["Cat_Controle"] = pd.cut(df_matrix["DMR_Num"], bins=y_bins, labels=y_labels, include_lowest=True)
+
+        matrix_text = np.empty((4, 4), dtype=object)
+        for i, y_lab in enumerate(reversed(y_labels)):
+            for j, x_lab in enumerate(x_labels):
+                sub_df = df_matrix[(df_matrix["Cat_Controle"] == y_lab) & (df_matrix["Cat_Criticite"] == x_lab)]
+                codes = sub_df["code_col"].astype(str).tolist()
+                matrix_text[i, j] = "<br>".join(codes) if codes else "-"
+
+        colorscale = [
+            [0.0, "#99C2A2"], # Vert - Zone A
+            [0.33, "#F9E79F"], # Jaune - Zone B
+            [0.66, "#F1948A"], # Rose - Zone C
+            [1.0, "#B03A2E"]  # Rouge - Zone D
+        ]
+        
+        z_values = [
+            [2, 2, 3, 3],
+            [1, 2, 2, 3],
+            [0, 1, 1, 2],
+            [0, 0, 1, 2]
+        ]
+
+        fig_matrix = go.Figure(data=go.Heatmap(
+            z=z_values,
+            x=x_labels,
+            y=list(reversed(y_labels)),
+            text=matrix_text,
+            texttemplate="%{text}",
+            textfont={"size": 9, "color": "black"},
+            colorscale=colorscale,
+            showscale=False
+        ))
+
+        fig_matrix.update_layout(
+            xaxis_title="DEGRÉ DE CRITICITÉ",
+            yaxis_title="DEGRÉ DE CONTRÔLE",
+            height=430,
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        st.plotly_chart(fig_matrix, use_container_width=True)
+
+    with col_right_visu:
+        st.subheader("🍩 Répartition Circulaire des Zones")
+        
+        # Nettoyage et comptage des zones
+        zone_counts = df_valid["zone_col"].value_counts().reset_index()
+        zone_counts.columns = ["Zone", "Total"]
+        
+        # Mapping exact des couleurs
+        color_map = {
+            "Zone A - Optimisation": "#99C2A2",
+            "Zone B - Vigilance": "#F9E79F",
+            "Zone C - Surveillance": "#F1948A",
+            "Zone D - Traitement": "#B03A2E"
+        }
+        
+        fig_donut = px.pie(
+            zone_counts, 
+            values="Total", 
+            names="Zone", 
+            hole=0.45,
+            color="Zone",
+            color_discrete_map=color_map
+        )
+        
+        fig_donut.update_traces(
+            textposition='inside', 
+            textinfo='percent+label',
+            marker=dict(line=dict(color='#FFFFFF', width=2))
+        )
+        
+        fig_donut.update_layout(
+            height=430,
+            showlegend=True,
+            legend=dict(orientation="h", y=-0.1),
+            margin=dict(l=10, r=10, t=10, b=10)
+        )
+        
+        st.plotly_chart(fig_donut, use_container_width=True)
+
+    st.markdown("---")
+
+    # Processus Prioritaires
     st.subheader("🎯 Top 3 Processus Prioritaires pour l'Audit (Modèle Quantifié)")
     st.table(pd.DataFrame([
         {"Rang": 1, "Processus": "P9 – Achat et approvisionnement", "Score Priorité (0-100)": 88.7, "Niveau": "🔴 TRÈS ÉLEVÉ", "Facteurs Principaux": "DMR Faible, Criticité Nette Élevée, Volume d'Achat"},
@@ -268,20 +343,18 @@ elif menu == "⚠️ Cartographie des risques":
     tab1, tab2 = st.tabs(["📋 Registre des Risques", "➕ Déclarer un Nouveau Risque"])
     
     with tab1:
-        # Filtres
-        f_proc = st.multiselect("Filtrer par Processus:", options=st.session_state.df_carto["processus"].unique())
+        f_proc = st.multiselect("Filtrer par Processus:", options=st.session_state.df_carto["proc_col"].unique())
         df_display = st.session_state.df_carto.copy()
         
         if f_proc:
-            df_display = df_display[df_display["processus"].isin(f_proc)]
+            df_display = df_display[df_display["proc_col"].isin(f_proc)]
             
         st.dataframe(
-            df_display[["code_risque", "processus", "criticite_brute", "dmr", "criticite_nette", "zone", "statut"]],
+            df_display[["code_col", "proc_col", "Criticite_Num", "DMR_Num", "criticite_nette", "zone_col", "statut"]],
             use_container_width=True,
             height=400
         )
         
-        # Export
         csv = df_display.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Exporter la Cartographie (CSV)", data=csv, file_name="cartographie_ormva_tf.csv", mime="text/csv")
         
@@ -291,7 +364,7 @@ elif menu == "⚠️ Cartographie des risques":
         
         with st.form("form_declare"):
             col_a, col_b = st.columns(2)
-            p_name = col_a.selectbox("Processus Concerné:", st.session_state.df_carto["processus"].unique())
+            p_name = col_a.selectbox("Processus Concerné:", st.session_state.df_carto["proc_col"].unique())
             sp_name = col_b.text_input("Sous-Processus:", "Ex: Gestion des marchés")
             
             r_desc = st.text_area("Description du Risque:", "")
@@ -308,15 +381,20 @@ elif menu == "⚠️ Cartographie des risques":
                 new_row = {
                     "id": new_id,
                     "code_risque": f"R_NEW.{new_id:02d}",
+                    "code_col": f"R_NEW.{new_id:02d}",
                     "processus": p_name,
+                    "proc_col": p_name,
                     "sous_processus": sp_name,
                     "description": r_desc,
                     "cause": r_cause,
                     "consequence": "À évaluer",
                     "criticite_brute": c_cb,
+                    "Criticite_Num": c_cb,
                     "dmr": c_dmr,
+                    "DMR_Num": c_dmr,
                     "criticite_nette": cn_calc,
-                    "zone": "En Évaluation",
+                    "zone": "Zone B - Vigilance",
+                    "zone_col": "Zone B - Vigilance",
                     "statut": "EN_ATTENTE",
                     "declared_by": st.session_state.user_role,
                     "created_at": datetime.now().strftime("%Y-%m-%d")
@@ -324,18 +402,17 @@ elif menu == "⚠️ Cartographie des risques":
                 
                 st.session_state.df_carto = pd.concat([st.session_state.df_carto, pd.DataFrame([new_row])], ignore_index=True)
                 
-                # Traçabilité
                 st.session_state.audit_trail.append({
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "user": st.session_state.user_role,
                     "action": "Déclaration Risque",
-                    "details": f"Risque R_NEW.{new_id:02d} créé b statut EN_ATTENTE"
+                    "details": f"Risque R_NEW.{new_id:02d} créé avec statut EN_ATTENTE"
                 })
                 
                 st.success("✅ Risque soumis avec succès! Transmis au Workflow de Validation.")
 
 # -------------------------------------------------------------
-# 6. MODULE 3: WORKFLOW DE VALIDATION (AUDITEUR)
+# 6. MODULE 3: WORKFLOW DE VALIDATION
 # -------------------------------------------------------------
 elif menu == "🔔 Workflow Validation":
     st.markdown('<div class="main-header">🔔 Workflow de Validation par l\'Auditeur Interne</div>', unsafe_allow_html=True)
@@ -351,10 +428,10 @@ elif menu == "🔔 Workflow Validation":
             st.info("Aucun risque en attente de validation pour le moment.")
         else:
             for idx, row in pending_df.iterrows():
-                with st.expander(f"📌 {row['code_risque']} - {row['processus']} (Déclaré par: {row['declared_by']})"):
-                    st.write(f"**Description:** {row['description']}")
-                    st.write(f"**Causes:** {row['cause']}")
-                    st.write(f"**Criticité Brute:** {row['criticite_brute']} | **DMR:** {row['dmr']} | **Criticité Nette Calculée:** {row['criticite_nette']}")
+                with st.expander(f"📌 {row['code_col']} - {row['proc_col']} (Déclaré par: {row['declared_by']})"):
+                    st.write(f"**Description:** {row.get('description', '-')}")
+                    st.write(f"**Causes:** {row.get('cause', '-')}")
+                    st.write(f"**Criticité Brute:** {row['Criticite_Num']} | **DMR:** {row['DMR_Num']} | **Criticité Nette Calculée:** {row['criticite_nette']}")
                     
                     comment = st.text_input("Commentaire de l'Auditeur:", key=f"comm_{row['id']}")
                     
@@ -365,7 +442,7 @@ elif menu == "🔔 Workflow Validation":
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "user": st.session_state.user_role,
                             "action": "Validation Risque",
-                            "details": f"Risque {row['code_risque']} validé. Commentaire: {comment}"
+                            "details": f"Risque {row['code_col']} validé. Commentaire: {comment}"
                         })
                         st.success("Risque validé avec succès!")
                         st.rerun()
@@ -376,20 +453,19 @@ elif menu == "🔔 Workflow Validation":
                             "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                             "user": st.session_state.user_role,
                             "action": "Rejet Risque",
-                            "details": f"Risque {row['code_risque']} rejeté."
+                            "details": f"Risque {row['code_col']} rejeté."
                         })
                         st.error("Risque rejeté.")
                         st.rerun()
 
 # -------------------------------------------------------------
-# 7. MODULE 4: PRIORISATION & SCORING (ÉCHELE 0 - 100)
+# 7. MODULE 4: PRIORISATION & SCORING
 # -------------------------------------------------------------
 elif menu == "🎯 Priorisation & Scoring":
     st.markdown('<div class="main-header">🎯 Classement Actuariel & Priorisation des Processus</div>', unsafe_allow_html=True)
     
     st.write("Le modèle de scoring unifié sur l'échelle **[0 - 100]** combine la Criticité Nette, le DMR, la VaR locale et le nombre de risques critiques.")
     
-    # Dataset exact des résultats ORMVA-TF
     scores_data = [
         {"Rang": 1, "Code": "P9", "Processus": "Achat et approvisionnement", "Score (0-100)": 88.7, "Priorité": "Très Élevée"},
         {"Rang": 2, "Code": "P2", "Processus": "Gestion de production agricole", "Score (0-100)": 82.8, "Priorité": "Très Élevée"},
@@ -406,7 +482,6 @@ elif menu == "🎯 Priorisation & Scoring":
     ]
     df_scores = pd.DataFrame(scores_data)
     
-    # Graphique du Classement
     fig_score = px.bar(
         df_scores, x="Score (0-100)", y="Processus", orientation="h",
         color="Score (0-100)", color_continuous_scale="Reds", text="Score (0-100)"
@@ -418,7 +493,7 @@ elif menu == "🎯 Priorisation & Scoring":
     st.write("**Validation du Modèle :** La corrélation de Spearman entre la méthode existante et le scoring quantifié donne **ρ = 0.98**, confirmant une excellente cohérence actuarielle.")
 
 # -------------------------------------------------------------
-# 8. MODULE 5: ANALYSES STATISTIQUES ADVANCED (ANOVA, MONTE CARLO, DMR)
+# 8. MODULE 5: ANALYSES STATISTIQUES (ANOVA, MONTE CARLO, DMR)
 # -------------------------------------------------------------
 elif menu == "📊 Analyses Statistiques":
     st.markdown('<div class="main-header">📊 Analyses Quantitatives et Modélisation (Colab Engine)</div>', unsafe_allow_html=True)
@@ -448,7 +523,6 @@ elif menu == "📊 Analyses Statistiques":
         col_v1.metric(f"Value at Risk (VaR {int(alpha*100)}%)", "4 816.70")
         col_v2.metric(f"Tail Value at Risk (TVaR {int(alpha*100)}%)", "5 240.10")
         
-        # Courbe de Distribution Simulée
         sim_data = np.random.gamma(shape=2.0, scale=1200, size=n_sim)
         fig_hist = px.histogram(sim_data, nbins=50, title="Distribution Simulée des Pertes Globales", color_discrete_sequence=["#1E4620"])
         fig_hist.add_vline(x=4816.7, line_dash="dash", line_color="red", annotation_text="VaR 95% = 4816.7")
@@ -464,7 +538,7 @@ elif menu == "📊 Analyses Statistiques":
         ]))
 
 # -------------------------------------------------------------
-# 9. MODULE 6: MISSIONS D'AUDIT & PLANIFICATION
+# 9. MODULE 6: MISSIONS D'AUDIT
 # -------------------------------------------------------------
 elif menu == "📋 Missions d'Audit":
     st.markdown('<div class="main-header">📋 Planification & Gestion des Missions d\'Audit</div>', unsafe_allow_html=True)
@@ -472,7 +546,7 @@ elif menu == "📋 Missions d'Audit":
     st.subheader("📅 Plan Annuel d'Audit Fondé sur les Risques")
     
     if st.button("➕ Planifier une Mission pour P9 (Achat & Approvisionnement)"):
-        st.success("Mission A-2026-01 planifiée automatiquement avec les données du Scoring!")
+        st.success("Mission AUD-2026-01 planifiée automatiquement avec les données du Scoring!")
         
     missions = [
         {"Code Mission": "AUD-2026-01", "Processus": "P9 - Achat et approvisionnement", "Score Priorité": 88.7, "Auditeur": "Auditeur_1", "Statut": "EN COURS", "Échéance": "2026-09-30"},
@@ -490,7 +564,7 @@ elif menu == "📜 Historique & Traçabilité":
     st.dataframe(pd.DataFrame(st.session_state.audit_trail), use_container_width=True)
 
 # -------------------------------------------------------------
-# 11. MODULE 8: ADMINISTRATION & ACCÈS
+# 11. MODULE 8: ADMINISTRATION
 # -------------------------------------------------------------
 elif menu == "⚙️ Administration":
     st.markdown('<div class="main-header">⚙️ Administration du Système & Matrice RBAC</div>', unsafe_allow_html=True)
