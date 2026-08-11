@@ -45,19 +45,22 @@ st.markdown("""
 # ---------------------------------------------------------
 @st.cache_data
 def load_data():
-    for filename in ['projet1.xlsx', 'data_reel.xlsx', 'cartographie_analysee_complete.xlsx']:
+    for filename in ['cartographie_analysee_complete.xlsx', 'projet1.xlsx', 'data_reel.xlsx']:
         try:
-            df = pd.read_excel(filename)
+            df = pd.read_excel(filename, sheet_name='Details_Risques' if 'cartographie' in filename else 0)
             return df
         except Exception:
-            continue
+            try:
+                df = pd.read_excel(filename)
+                return df
+            except Exception:
+                continue
     return pd.DataFrame()
 
 df_original = load_data()
 if not df_original.empty:
     df_original.columns = [c.strip().lower() for c in df_original.columns]
 
-# Session state pour la gestion des accès et plans d'action
 if 'users_db' not in st.session_state:
     st.session_state['users_db'] = pd.DataFrame([
         {"Nom": "Auditeur Principal", "Email": "audit@ormva-tf.ma", "Rôle": "Auditeur Interne", "Statut": "Actif"},
@@ -109,7 +112,6 @@ menu = st.sidebar.radio(
     ]
 )
 
-# En-tête institutionnel
 st.markdown("""
     <div class="header-container">
         <div class="header-title">🛡️ ORMVA-TF — Enterprise Risk & Audit Center</div>
@@ -118,7 +120,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# MODULE 1: DASHBOARD & DONUT CHART
+# MODULE 1: DASHBOARD & DONUT CHART (COULEURS EXACTES CORRIGÉES)
 # ---------------------------------------------------------
 if menu == "🏠 Dashboard & Répartition (Donut)":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord & Répartition</b></div>""", unsafe_allow_html=True)
@@ -134,23 +136,37 @@ if menu == "🏠 Dashboard & Répartition (Donut)":
         
         with col_l:
             st.subheader("🎯 Répartition par Zone d'Action (Donut)")
-            if 'prob' in df.columns and 'grav' in df.columns:
-                crit = df['prob'] * df['grav']
-                df['zone'] = pd.cut(crit, bins=[-1, 4, 8, 12, 25], labels=['Zone A - Optimisation', 'Zone B - Vigilance', 'Zone C - Surveillance', 'Zone D - Traitement Prioritaire'])
-            else:
-                df['zone'] = 'Zone B - Vigilance'
             
-            zone_counts = df['zone'].value_counts().reset_index()
+            # Utilisation de la colonne cluster_label si elle existe pour correspondre exactement à l'image correcte
+            if 'cluster_label' in df.columns:
+                # Mapping pour unifier l'affichage avec l'image correcte
+                mapping_zones = {
+                    'Negliges': 'Zone B - Vigilance',
+                    'Mineurs': 'Zone C - Surveillance',
+                    'Sous controle': 'Zone A - Optimisation',
+                    'Critiques non maitrises': 'Zone D - Traitement Prioritaire'
+                }
+                df['zone_mapped'] = df['cluster_label'].map(mapping_zones).fillna('Zone B - Vigilance')
+                zone_counts = df['zone_mapped'].value_counts().reset_index()
+            else:
+                if 'prob' in df.columns and 'grav' in df.columns:
+                    crit = df['prob'] * df['grav']
+                    df['zone_mapped'] = pd.cut(crit, bins=[-1, 4, 8, 12, 25], labels=['Zone A - Optimisation', 'Zone B - Vigilance', 'Zone C - Surveillance', 'Zone D - Traitement Prioritaire'])
+                else:
+                    df['zone_mapped'] = 'Zone B - Vigilance'
+                zone_counts = df['zone_mapped'].value_counts().reset_index()
+
             zone_counts.columns = ['Zone', 'Count']
             
+            # Couleurs exactes demandées (correspondant à l'image correcte)
             fig_donut = px.pie(
                 zone_counts, values='Count', names='Zone', hole=0.4,
                 color='Zone',
                 color_discrete_map={
-                    'Zone D - Traitement Prioritaire': '#A31D1D',
-                    'Zone C - Surveillance': '#D9822B',
-                    'Zone B - Vigilance': '#1B4965',
-                    'Zone A - Optimisation': '#2D6A4F'
+                    'Zone B - Vigilance': '#1B3B5F',          # Bleu foncé
+                    'Zone C - Surveillance': '#D9822B',      # Orange / Jaune moutarde
+                    'Zone A - Optimisation': '#2D6A4F',      # Vert forêt
+                    'Zone D - Traitement Prioritaire': '#A31D1D' # Rouge brique
                 }
             )
             fig_donut.update_layout(height=400, plot_bgcolor='#FFFFFF')
@@ -277,7 +293,7 @@ elif menu == "📋 Suivi des Plans d'Action":
 
     pa_df = st.session_state.plan_actions.copy()
     if pa_df.empty:
-        st.info("Aucun plan d'action enregistré pour le moment. Utilisez le formulaire ci-dessus pour ajouter une recommandation.")
+        st.info("Aucun plan d'action enregistré pour le moment.")
     else:
         today = pd.Timestamp(date.today())
         pa_df["Échéance"] = pd.to_datetime(pa_df["Échéance"])
@@ -348,7 +364,7 @@ elif menu == "👥 Gestion des Accès & Rôles":
             if u_nom and u_email:
                 new_acc = pd.DataFrame([{"Nom": u_nom, "Email": u_email, "Rôle": u_role, "Statut": "Actif"}])
                 st.session_state['users_db'] = pd.concat([st.session_state['users_db'], new_acc], ignore_index=True)
-                st.success(f"Accès accordé avec succès à {u_nom} !")
+                st.success(f"Accès accordé avec succès à s {u_nom} !")
                 st.rerun()
 
 # ---------------------------------------------------------
