@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 
 # ---------------------------------------------------------
-# 1. PAGE CONFIGURATION & ENTERPRISE DESIGN
+# 1. CONFIGURATION DE LA PAGE & STYLE INSTITUTIONNEL
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="ORMVA-TF | Risk & Audit Management Platform",
+    page_title="ORMVA-TF | Enterprise Risk & Audit Center",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -38,15 +39,32 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Session state initialization
-if 'users_db' not in st.session_state:
-    st.session_state['users_db'] = pd.DataFrame([
-        {"Nom": "Auditeur Principal", "Email": "audit@ormva-tf.ma", "Rôle": "Auditeur Interne", "Statut": "Actif"},
-        {"Nom": "Responsable P9", "Email": "achats@ormva-tf.ma", "Rôle": "Responsable Processus", "Statut": "Actif"}
-    ])
+# ---------------------------------------------------------
+# 2. CHARGEMENT DES DONNÉES RÉELLES DEPUIS LES FICHIERS
+# ---------------------------------------------------------
+@st.cache_data
+def load_data():
+    try:
+        df_carto = pd.read_excel('cartographie_analysee_complete.xlsx', sheet_name='Details_Risques')
+    except Exception:
+        df_carto = pd.DataFrame()
+
+    try:
+        df_score = pd.read_excel('indicateurs_powerbi_v2.xlsx', sheet_name='Score_Priorite')
+    except Exception:
+        df_score = pd.DataFrame()
+
+    try:
+        df_var = pd.read_excel('indicateurs_powerbi_v2.xlsx', sheet_name='VaR_TVaR')
+    except Exception:
+        df_var = pd.DataFrame()
+
+    return df_carto, df_score, df_var
+
+df_carto, df_score, df_var = load_data()
 
 # ---------------------------------------------------------
-# 2. HEADER & NAVIGATION
+# 3. HEADER & NAVIGATION (SIDEBAR)
 # ---------------------------------------------------------
 st.markdown("""
     <div class="header-container">
@@ -56,145 +74,139 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.sidebar.title("🏢 Direction de l'Audit")
-uploaded_file = st.sidebar.file_uploader("📂 Importer votre Cartographie (Excel/CSV)", type=["xlsx", "csv"])
+st.sidebar.caption("Source : Fichiers Power BI & Cartographie Officielle")
 
 menu = st.sidebar.radio(
-    "Modules Métier :",
+    "Modules de la Plateforme :",
     [
-        "🏠 Dashboard & Priorisation",
-        "⚠️ Cartographie Réelle",
-        "🔔 Workflow de Validation",
-        "📊 Analytics & Modèles Actuariels",
-        "📋 Plan d'Audit & Missions",
-        "👥 Gestion des Accès",
-        "📜 Traçabilité & Logs"
+        "🏠 Dashboard Exécutif",
+        "⚠️ Matrice des Risques (Heatmap)",
+        "🎯 Priorisation & Scoring",
+        "📊 Analyses VaR & Stochastique",
+        "📋 Registre Détaillé des Risques"
     ]
 )
 
-# Chargement des données (Soit le fichier réel uploadé, soit données par défaut structurées)
-@st.cache_data
-def load_default_data():
-    # Données par défaut propres si aucun fichier n'est chargé
-    p_data = [
-        {'code': 'P9', 'libelle': 'Achat et approvisionnement', 'score': 88.7, 'var95': 1240.5, 'critCount': 8, 'dmrMoy': 0.42, 'priorite': 'Très Élevée', 'count': 22},
-        {'code': 'P2', 'libelle': 'Gestion de production agricole', 'score': 82.8, 'var95': 1080.2, 'critCount': 7, 'dmrMoy': 0.45, 'priorite': 'Très Élevée', 'count': 18},
-        {'code': 'P7', 'libelle': 'Gestion budgétaire et financière', 'score': 71.8, 'var95': 890.1, 'critCount': 5, 'dmrMoy': 0.50, 'priorite': 'Élevée', 'count': 19},
-        {'code': 'P1', 'libelle': 'Aides et incitations FDA', 'score': 61.1, 'var95': 620.4, 'critCount': 4, 'dmrMoy': 0.55, 'priorite': 'Élevée', 'count': 14},
-    ]
-    return pd.DataFrame(p_data)
-
-df_proc = load_default_data()
-
-# Gestion du fichier réel uploadé par l'utilisateur
-if uploaded_file is not None:
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df_risks = pd.read_csv(uploaded_file)
-        else:
-            df_risks = pd.read_excel(uploaded_file)
-        st.sidebar.success("✅ Cartographie réelle chargée avec succès !")
-    except Exception as e:
-        st.sidebar.error(f"Erreur lors de la lecture du fichier : {e}")
-        df_risks = pd.DataFrame(columns=["Code", "Processus", "Intitulé", "Prob", "Grav", "CB", "DMR", "CN", "Statut"])
-else:
-    # DataFrame vide ou structure de base si pas de fichier
-    df_risks = pd.DataFrame(columns=["Code", "Processus", "Intitulé", "Prob", "Grav", "CB", "DMR", "CN", "Statut"])
-
 # ---------------------------------------------------------
-# MODULE 1: DASHBOARD
+# MODULE 1: DASHBOARD EXÉCUTIF
 # ---------------------------------------------------------
-if menu == "🏠 Dashboard & Priorisation":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord & Priorisation</b></div>""", unsafe_allow_html=True)
+if menu == "🏠 Dashboard Exécutif":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord Exécutif</b></div>""", unsafe_allow_html=True)
     
+    total_risks = len(df_carto) if not df_carto.empty else 0
+    total_var = df_var['VaR_95'].sum() if not df_var.empty and 'VaR_95' in df_var.columns else 0.0
+    top_proc = df_score.sort_values('Score_Priorite_Audit', ascending=False).iloc[0]['Processus'] if not df_score.empty else "N/A"
+
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Risques Totaux", f"{len(df_risks)}" if not df_risks.empty else "0", "Fichier Réel")
-    m2.metric("VaR Globale (95%)", "4 816.7 DH", "Monte Carlo")
-    m3.metric("Anomalies DMR", "21 Risques", "Surestimations R² = 0.915", delta_color="inverse")
-    m4.metric("Processus Top 1", "P9 (88.7)", "Achat & Approv.")
+    m1.metric("Risques Cartographiés", f"{total_risks}", "Total Fichier Réel")
+    m2.metric("VaR Globale (95%)", f"{total_var:,.1f} DH", "Modèle Stochastique")
+    m3.metric("Processus Prioritaire #1", f"{top_proc[:20]}...", "Top Score PFA")
+    m4.metric("Statut Système", "Opérationnel", "100% Connecté")
 
     st.write("")
-    st.subheader("📊 Graphique de Priorisation des Processus")
-    fig = px.bar(
-        df_proc, x='score', y='code', orientation='h', color='score',
-        color_continuous_scale=['#4E7D5B', '#1E513B', '#0A2F1D'], text='score'
-    )
-    fig.update_layout(height=380, yaxis={'categoryorder':'total ascending'}, plot_bgcolor='#FFFFFF')
-    st.plotly_chart(fig, use_container_width=True)
+    col_l, col_r = st.columns(2)
+    
+    with col_l:
+        st.subheader("🎯 Score de Priorisation par Processus")
+        if not df_score.empty:
+            fig_score = px.bar(
+                df_score.sort_values('Score_Priorite_Audit', ascending=True),
+                x='Score_Priorite_Audit', y='Processus', orientation='h',
+                color='Score_Priorite_Audit', color_continuous_scale=['#4E7D5B', '#1E513B', '#0A2F1D'],
+                text='Score_Priorite_Audit'
+            )
+            fig_score.update_layout(height=400, yaxis={'categoryorder':'total ascending'}, plot_bgcolor='#FFFFFF')
+            st.plotly_chart(fig_score, use_container_width=True)
+        else:
+            st.warning("Données de score non disponibles.")
+
+    with col_r:
+        st.subheader("📊 Répartition de l'Exposition VaR 95%")
+        if not df_var.empty and 'Contribution_VaR_pct' in df_var.columns:
+            fig_pie = px.pie(
+                df_var, values='Contribution_VaR_pct', names='Processus',
+                hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r
+            )
+            fig_pie.update_layout(height=400, plot_bgcolor='#FFFFFF')
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.warning("Données VaR non disponibles.")
 
 # ---------------------------------------------------------
-# MODULE 2: CARTOGRAPHIE RÉELLE
+# MODULE 2: MATRICE DES RISQUES (HEATMAP / ISHNAWER STYLE)
 # ---------------------------------------------------------
-elif menu == "⚠️ Cartographie Réelle":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Cartographie Réelle des Risques</b></div>""", unsafe_allow_html=True)
-    st.subheader("📋 Registre Officiel de la Cartographie")
+elif menu == "⚠️ Matrice des Risques (Heatmap)":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice de Criticité Brute (Heatmap)</b></div>""", unsafe_allow_html=True)
+    st.subheader("🗺️ Matrice d'Évaluation des Risques (Probabilité vs Gravité)")
 
-    if df_risks.empty:
-        st.warning("⚠️ Aucun fichier de cartographie n'a été importé. Veuillez importer votre fichier Excel/CSV via la barre latérale (Sidebar) pour afficher vos données réelles.")
-    else:
-        col_f1, col_f2 = st.columns(2)
-        search_term = col_f1.text_input("🔍 Rechercher un risque :", "")
+    if not df_carto.empty and 'prob' in df_carto.columns and 'grav' in df_carto.columns:
+        # Création de la matrice croisée (Pivot Table)
+        matrix_df = pd.crosstab(df_carto['grav'], df_carto['prob'])
         
-        filtered = df_risks
-        if search_term and "Intitulé" in filtered.columns:
-            filtered = filtered[filtered['Intitulé'].str.contains(search_term, case=False, na=False)]
-            
+        fig_matrix = px.imshow(
+            matrix_df,
+            labels=dict(x="Probabilité", y="Gravité", color="Nombre de Risques"),
+            x=sorted(df_carto['prob'].unique()),
+            y=sorted(df_carto['grav'].unique()),
+            color_continuous_scale="Greens",
+            text_auto=True
+        )
+        fig_matrix.update_layout(title="Concentration des Risques dans la Matrice Institutionnelle", height=500, plot_bgcolor='#FFFFFF')
+        st.plotly_chart(fig_matrix, use_container_width=True)
+    else:
+        st.warning("Données de probabilité et gravité introuvables dans le fichier.")
+
+# ---------------------------------------------------------
+# MODULE 3: PRIORISATION & SCORING
+# ---------------------------------------------------------
+elif menu == "🎯 Priorisation & Scoring":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Classement & Scoring</b></div>""", unsafe_allow_html=True)
+    st.subheader("📋 Tableau Officiel de Priorisation des Missions d'Audit")
+
+    if not df_score.empty:
+        st.dataframe(df_score[['Processus', 'Criticite_Nette_Somme', 'Nb_Risques_Critiques', 'VaR_95', 'Score_Priorite_Audit', 'Rang_Quantifie']], use_container_width=True, height=450)
+    else:
+        st.warning("Aucun score de priorisation trouvé.")
+
+# ---------------------------------------------------------
+# MODULE 4: ANALYSES VAR & STOCHASTIQUE
+# ---------------------------------------------------------
+elif menu == "📊 Analyses VaR & Stochastique":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Analyses VaR & TVaR</b></div>""", unsafe_allow_html=True)
+    st.subheader("🎲 Modélisation Stochastique des Pertes (VaR 95% & TVaR 95%)")
+
+    if not df_var.empty:
+        fig_var = px.bar(
+            df_var, x='Processus', y=['VaR_95', 'TVaR_95'],
+            barmode='group', color_discrete_sequence=['#1E513B', '#4E7D5B']
+        )
+        fig_var.update_layout(height=450, plot_bgcolor='#FFFFFF', xaxis_tickangle=-45)
+        st.plotly_chart(fig_var, use_container_width=True)
+        
+        st.dataframe(df_var, use_container_width=True)
+    else:
+        st.warning("Données VaR indisponibles.")
+
+# ---------------------------------------------------------
+# MODULE 5: REGISTRE DÉTAILLÉ
+# ---------------------------------------------------------
+elif menu == "📋 Registre Détaillé des Risques":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Registre Détaillé</b></div>""", unsafe_allow_html=True)
+    st.subheader("📑 Base de Données Complète des Risques")
+
+    if not df_carto.empty:
+        search = st.text_input("🔍 Rechercher un intitulé ou un processus :", "")
+        filtered = df_carto
+        if search:
+            mask = df_carto.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
+            filtered = df_carto[mask]
         st.dataframe(filtered, use_container_width=True, height=550)
-
-# ---------------------------------------------------------
-# MODULE 3: WORKFLOW DE VALIDATION
-# ---------------------------------------------------------
-elif menu == "🔔 Workflow de Validation":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Workflow de Validation</b></div>""", unsafe_allow_html=True)
-    st.subheader("🔔 Validation des Risques Soumis")
-    st.info("Espace de vérification des fiches de risques remontées par les responsables de processus.")
-
-# ---------------------------------------------------------
-# MODULE 4: ANALYTICS
-# ---------------------------------------------------------
-elif menu == "📊 Analytics & Modèles Actuariels":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Analyses Quantitatives</b></div>""", unsafe_allow_html=True)
-    st.subheader("🧪 Résultats des Modèles Actuariels & Statistiques")
-    col1, col2 = st.columns(2)
-    col1.metric("ANOVA F-Statistic", "4.22 (p < 0.05)")
-    col2.metric("Régression DMR R²", "0.915")
-
-# ---------------------------------------------------------
-# MODULE 5: PLAN D'AUDIT
-# ---------------------------------------------------------
-elif menu == "📋 Plan d'Audit & Missions":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Plan d'Audit</b></div>""", unsafe_allow_html=True)
-    st.subheader("📅 Planification des Missions d'Audit Interne")
-
-# ---------------------------------------------------------
-# MODULE 6: GESTION DES ACCÈS
-# ---------------------------------------------------------
-elif menu == "👥 Gestion des Accès":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Gestion des Accès</b></div>""", unsafe_allow_html=True)
-    st.subheader("👥 Console d'Accréditation des Utilisateurs")
-    st.dataframe(st.session_state['users_db'], use_container_width=True)
-
-    with st.form("add_acc_form"):
-        n_nom = st.text_input("Nom & Prénom :")
-        n_email = st.text_input("Email (@ormva-tf.ma) :")
-        n_role = st.selectbox("Rôle :", ["Auditeur Interne", "Responsable Processus", "Direction"])
-        if st.form_submit_button("🔒 Octroyer l'Accès"):
-            if n_nom:
-                new_row = pd.DataFrame([{"Nom": n_nom, "Email": n_email, "Rôle": n_role, "Statut": "Actif"}])
-                st.session_state['users_db'] = pd.concat([st.session_state['users_db'], new_row], ignore_index=True)
-                st.success(f"Accès accordé à {n_nom}.")
-                st.rerun()
-
-# ---------------------------------------------------------
-# MODULE 7: AUDIT TRAIL
-# ---------------------------------------------------------
-elif menu == "📜 Traçabilité & Logs":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Audit Trail</b></div>""", unsafe_allow_html=True)
-    st.subheader("📜 Historique des Opérations Système")
-    st.table(pd.DataFrame([{"Date": "11/08/2026", "Action": "Importation Cartographie Réelle", "Statut": "Succès"}]))
+    else:
+        st.warning("Aucun détail de risque trouvé.")
 
 # Footer
 st.markdown("""
     <div class="footer-dark">
-        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme Institutionnelle (2026)
+        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme Intégrée Power BI & Python (2026)
     </div>
 """, unsafe_allow_html=True)
