@@ -53,8 +53,6 @@ def load_data():
     return pd.DataFrame()
 
 df = load_data()
-
-# Uniformisation des noms de colonnes si nécessaire
 if not df.empty:
     df.columns = [c.strip().lower() for c in df.columns]
 
@@ -101,14 +99,11 @@ if menu == "🏠 Dashboard & Répartition (Donut)":
         
         with col_l:
             st.subheader("🎯 Répartition par Zone d'Action (Donut)")
-            # Simulation des zones si non présentes
-            if 'zone' not in df.columns:
-                # Attribution basique basée sur prob et grav si disponibles
-                if 'prob' in df.columns and 'grav' in df.columns:
-                    crit = df['prob'] * df['grav']
-                    df['zone'] = pd.cut(crit, bins=[-1, 4, 8, 12, 25], labels=['Zone A - Optimisation', 'Zone B - Vigilance', 'Zone C - Surveillance', 'Zone D - Traitement Prioritaire'])
-                else:
-                    df['zone'] = 'Zone B - Vigilance'
+            if 'prob' in df.columns and 'grav' in df.columns:
+                crit = df['prob'] * df['grav']
+                df['zone'] = pd.cut(crit, bins=[-1, 4, 8, 12, 25], labels=['Zone A - Optimisation', 'Zone B - Vigilance', 'Zone C - Surveillance', 'Zone D - Traitement Prioritaire'])
+            else:
+                df['zone'] = 'Zone B - Vigilance'
             
             zone_counts = df['zone'].value_counts().reset_index()
             zone_counts.columns = ['Zone', 'Count']
@@ -138,28 +133,35 @@ if menu == "🏠 Dashboard & Répartition (Donut)":
                 st.plotly_chart(fig_bar, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 2: MATRICE DES RISQUES (HEATMAP STYLE)
+# MODULE 2: MATRICE DES RISQUES (HEATMAP STYLE SÉCURISÉ)
 # ---------------------------------------------------------
 elif menu == "🗺️ Matrice des Risques (Heatmap Style)":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice des Risques</b></div>""", unsafe_allow_html=True)
-    st.subheader("🗺️ Matrice d'Évaluation (Probabilité vs Gravité / Degré de Contrôle)")
+    st.subheader("🗺️ Matrice d'Évaluation (Probabilité vs Gravité)")
 
     if not df.empty and 'prob' in df.columns and 'grav' in df.columns:
-        # Création d'une matrice avec les codes des risques à l'intérieur
         matrix_data = pd.crosstab(df['grav'], df['prob'])
         
-        fig_matrix = px.imshow(
-            matrix_data,
-            labels=dict(x="Probabilité", y="Gravité", color="Nombre de Risques"),
-            x=sorted(df['prob'].unique()),
-            y=sorted(df['grav'].unique()),
-            color_continuous_scale="Reds",
-            text_auto=True
-        )
-        fig_matrix.update_layout(height=500, plot_bgcolor='#FFFFFF', title="Concentration des Risques par Niveau")
-        st.plotly_chart(fig_matrix, use_container_width=True)
+        # Utilisation de Graph Objects (go.Heatmap) pour éviter tout ValueError de imshow
+        fig_matrix = go.Figure(data=go.Heatmap(
+            z=matrix_data.values,
+            x=[str(c) for c in matrix_data.columns],
+            y=[str(r) for r in matrix_data.index],
+            colorscale='Reds',
+            text=matrix_data.values,
+            texttemplate="%{text}",
+            textfont={"size": 16}
+        ))
         
-        st.info("💡 Cette matrice reflète la criticité brute (Probabilité × Gravité) de la même manière que les matrices institutionnelles d'audit.")
+        fig_matrix.update_layout(
+            title="Concentration des Risques dans la Matrice",
+            xaxis_title="Probabilité",
+            yaxis_title="Gravité",
+            height=500,
+            plot_bgcolor='#FFFFFF'
+        )
+        st.plotly_chart(fig_matrix, use_container_width=True)
+        st.info("💡 Matrice de criticité brute calculée automatiquement à partir de vos données.")
     else:
         st.warning("Colonnes 'prob' et 'grav' requises pour afficher la matrice.")
 
@@ -171,7 +173,6 @@ elif menu == "🔥 Top 10 Risques Prioritaires":
     st.subheader("🔥 Top 10 Risques les plus Critiques (Scoring)")
 
     if not df.empty:
-        # Calcul score si colonnes présentes
         if 'prob' in df.columns and 'grav' in df.columns:
             df['score_priorite'] = df['prob'] * df['grav']
         elif 'criticité brute' in df.columns:
