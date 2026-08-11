@@ -269,7 +269,11 @@ elif menu == "📊 Analyses Actuarielles (ANOVA & VaR)":
 # MODULE 5: PLANIFICATION DES MISSIONS
 # ---------------------------------------------------------
 elif menu == "📋 Planification des Missions":
-    st.markdown('<div class="breadcrumb">Accueil › <b>Planification d'Audit</b></div>', unsafe_allow_html=True)
+    # ❌ Ligne avec erreur :
+st.markdown('<div class="breadcrumb">Accueil › <b>Planification d'Audit</b></div>', unsafe_allow_html=True)
+
+# ✅ Ligne corrigée :
+st.markdown('<div class="breadcrumb">Accueil › <b>Planification d&apos;Audit</b></div>', unsafe_allow_html=True)
     st.subheader("📅 Créer une Nouvelle Mission d'Audit Interne")
 
     with st.form("mission_plan"):
