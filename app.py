@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS pour le style Enterprise (Vert Institutionnel, Cards, Buttons)
+# Custom CSS pour le style Enterprise
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -26,7 +26,6 @@ st.markdown("""
         background-color: #FAFAFA;
     }
 
-    /* HEADER CUSTOM */
     .header-container {
         background-color: #FFFFFF;
         padding: 16px 24px;
@@ -47,14 +46,12 @@ st.markdown("""
         margin-top: 4px;
     }
 
-    /* BREADCRUMB */
     .breadcrumb {
         font-size: 0.8rem;
         color: #6B7280;
         margin-bottom: 16px;
     }
 
-    /* METRIC CARDS Dynamic */
     div[data-testid="stMetric"] {
         background-color: #FFFFFF;
         border: 1px solid #E5E7EB;
@@ -68,7 +65,6 @@ st.markdown("""
         font-weight: 800;
     }
 
-    /* FOOTER SOMBRE INSTITUTIONNEL */
     .footer-dark {
         background-color: #0B1320;
         color: #9CA3AF;
@@ -113,7 +109,6 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# NAVIGATION SIDEBAR INTERACTIVE
 st.sidebar.title("📌 Navigation Système")
 menu = st.sidebar.radio(
     "Accéder aux modules :",
@@ -128,12 +123,11 @@ menu = st.sidebar.radio(
 )
 
 # ---------------------------------------------------------
-# MODULE 1: DASHBOARD & PRIORISATION (INTERACTIF)
+# MODULE 1: DASHBOARD & PRIORISATION
 # ---------------------------------------------------------
 if menu == "🏠 Dashboard & Priorisation PFA":
-    st.markdown('<div class="breadcrumb">Accueil › Dashboard Décisionnel › <b>Priorisation 2026</b></div>', unsafe_allow_html=True)
+    st.markdown("""<div class="breadcrumb">Accueil › Dashboard Décisionnel › <b>Priorisation 2026</b></div>""", unsafe_allow_html=True)
     
-    # METRICS INTERACTIFS
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Risques Totaux", "159", "12 Processus")
     m2.metric("VaR Globale (95%)", "4 816.7 DH", "Monte Carlo")
@@ -143,7 +137,6 @@ if menu == "🏠 Dashboard & Priorisation PFA":
     st.write("")
     st.subheader("🎯 Top Processus Prioritaires pour l'Audit Interne (Score 0–100)")
     
-    # CARDS DYNAMIQUES AVEC EXPANDER ET ACTION DIRECTE
     top_4 = df_proc.head(4)
     c1, c2 = st.columns(2)
     
@@ -184,7 +177,6 @@ if menu == "🏠 Dashboard & Priorisation PFA":
     st.write("")
     st.subheader("📊 Graphique Interactif de Priorisation (Classement des 12 Processus)")
     
-    # PLOTLY INTERACTIF
     fig = px.bar(
         df_proc, 
         x='score', 
@@ -199,10 +191,10 @@ if menu == "🏠 Dashboard & Priorisation PFA":
     st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 2: CARTOGRAPHIE DES RISQUES INTERACTIVE
+# MODULE 2: CARTOGRAPHIE DES RISQUES
 # ---------------------------------------------------------
 elif menu == "⚠️ Cartographie des Risques":
-    st.markdown('<div class="breadcrumb">Accueil › <b>Cartographie des Risques (159)</b></div>', unsafe_allow_html=True)
+    st.markdown("""<div class="breadcrumb">Accueil › <b>Cartographie des Risques (159)</b></div>""", unsafe_allow_html=True)
     st.subheader("📋 Registre Filtrable de la Cartographie")
 
     sample_risks = pd.DataFrame([
@@ -223,10 +215,10 @@ elif menu == "⚠️ Cartographie des Risques":
     st.dataframe(filtered, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 3: WORKFLOW DE VALIDATION (INTERACTIF)
+# MODULE 3: WORKFLOW DE VALIDATION
 # ---------------------------------------------------------
 elif menu == "🔔 Workflow de Validation":
-    st.markdown('<div class="breadcrumb">Accueil › <b>Workflow de Validation</b></div>', unsafe_allow_html=True)
+    st.markdown("""<div class="breadcrumb">Accueil › <b>Workflow de Validation</b></div>""", unsafe_allow_html=True)
     st.subheader("🔔 Risques en Attente de Vérification par l'Auditeur Interne")
 
     with st.form("validation_form"):
@@ -239,13 +231,13 @@ elif menu == "🔔 Workflow de Validation":
         
         submit_val = st.form_submit_button("⚡ Soumettre la décision")
         if submit_val:
-            st.success(f"Décision enregistrée avec succès : [{d_decision}]. Les données et le scoring ont été mis à jour dans l'Audit Trail.")
+            st.success(f"Décision enregistrée avec succès : [{d_decision}]. Les données ont été mises à jour.")
 
 # ---------------------------------------------------------
 # MODULE 4: ANALYSES ACTUARIELLES
 # ---------------------------------------------------------
 elif menu == "📊 Analyses Actuarielles (ANOVA & VaR)":
-    st.markdown('<div class="breadcrumb">Accueil › <b>Analyses Quantitatives</b></div>', unsafe_allow_html=True)
+    st.markdown("""<div class="breadcrumb">Accueil › <b>Analyses Quantitatives</b></div>""", unsafe_allow_html=True)
     
     t1, t2, t3 = st.tabs(["🧪 Test ANOVA", "📉 Régression DMR (R² = 0.915)", "🎲 Simulation Monte Carlo (VaR)"])
     
@@ -253,12 +245,12 @@ elif menu == "📊 Analyses Actuarielles (ANOVA & VaR)":
         st.subheader("Test d'Analyse de Variance (ANOVA)")
         st.metric("F-Statistic", "4.22")
         st.metric("p-value", "0.00002")
-        st.success("Conclusion : p-value < 0.05 confirming that differences in net criticality between processes are statistically significant.")
+        st.success("Conclusion : p-value < 0.05 confirmant la signification statistique des différences de criticité nette.")
         
     with t2:
         st.subheader("Détection des Surestimations du DMR")
         st.metric("R² Model", "0.915")
-        st.warning("21 risques identifiés avec un DMR potentiellement surestimé nécessitant une révision ciblée.")
+        st.warning("21 risques identifiés avec un DMR potentiellement surestimé.")
 
     with t3:
         st.subheader("Distribution de Pertes Stochastique")
@@ -269,12 +261,8 @@ elif menu == "📊 Analyses Actuarielles (ANOVA & VaR)":
 # MODULE 5: PLANIFICATION DES MISSIONS
 # ---------------------------------------------------------
 elif menu == "📋 Planification des Missions":
-# ❌ Ligne avec erreur :
-st.markdown('<div class="breadcrumb">Accueil › <b>Planification d'Audit</b></div>', unsafe_allow_html=True)
-
-# ✅ Ligne corrigée :
-st.markdown('<div class="breadcrumb">Accueil › <b>Planification d&apos;Audit</b></div>', unsafe_allow_html=True)
-st.subheader("📅 Créer une Nouvelle Mission d'Audit Interne")
+    st.markdown("""<div class="breadcrumb">Accueil › <b>Planification d'Audit</b></div>""", unsafe_allow_html=True)
+    st.subheader("📅 Créer une Nouvelle Mission d'Audit Interne")
 
     with st.form("mission_plan"):
         p_target = st.selectbox("Sélectionner le Processus Cible :", df_proc['code'] + " - " + df_proc['libelle'])
@@ -289,7 +277,7 @@ st.subheader("📅 Créer une Nouvelle Mission d'Audit Interne")
 # MODULE 6: AUDIT TRAIL
 # ---------------------------------------------------------
 elif menu == "📜 Audit Trail & Traçabilité":
-    st.markdown('<div class="breadcrumb">Accueil › <b>Audit Trail</b></div>', unsafe_allow_html=True)
+    st.markdown("""<div class="breadcrumb">Accueil › <b>Audit Trail</b></div>""", unsafe_allow_html=True)
     st.subheader("📜 Historique Immuable des Actions")
     
     logs_df = pd.DataFrame([
@@ -300,14 +288,14 @@ elif menu == "📜 Audit Trail & Traçabilité":
     st.table(logs_df)
 
 # ---------------------------------------------------------
-# 4. FOOTER SOMBRE DYNAMIQUE
+# 4. FOOTER SOMBRE
 # ---------------------------------------------------------
 st.markdown("""
     <div class="footer-dark">
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <div>
-                <strong>🛡️ ORMVA-TF Risk & Audit Center</strong> — Système Decisionnel d'Aide à la Priorisation
-                <br><span style="color: #6B7280; font-size: 0.75rem;">Projet de Fin d'Études f l'Ingénierie Financière et Actuariat (2026)</span>
+                <strong>🛡️ ORMVA-TF Risk & Audit Center</strong> — Système Décisionnel d'Aide à la Priorisation
+                <br><span style="color: #6B7280; font-size: 0.75rem;">Projet de Fin d'Études en Génie Financier et Actuariat (2026)</span>
             </div>
             <div>
                 <span style="color: #4E7D5B;">Status: <b>Opérationnel</b></span> | Model Version: <b>V1.0</b>
