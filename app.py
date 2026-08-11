@@ -63,77 +63,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 2. CHARGEMENT ET PRÉPARATION SÉCURISÉE DES DONNÉES (159 RISQUES)
+# 2. CHARGEMENT STRICT DU FICHIER EXCEL (projet1.xlsx)
 # -------------------------------------------------------------
 @st.cache_data
 def load_and_prep_data():
-    try:
-        df = pd.read_excel("projet1.xlsx")
-        df.columns = df.columns.str.strip()
-        df = df.dropna(how='all')
-    except Exception:
-        np.random.seed(42)
-        processus_list = [
-            "P1 - Aides et incitations financières", "P2 - Gestion de production agricole",
-            "P3 - Aménagement", "P4 - Gestion des réseaux d'irrigation", "P5 - Logistique",
-            "P6 - Juridique", "P7 - Gestion budgétaire & comptable", "P8 - Informatique",
-            "P9 - Achat et approvisionnement", "P10 - Ressources humaines",
-            "P11 - Audit interne", "P12 - Direction et pilotage"
-        ]
-        counts = [12, 20, 10, 15, 10, 8, 21, 12, 25, 12, 6, 8]
-        records = []
-        id_counter = 1
-        for p_idx, proc in enumerate(processus_list):
-            for i in range(counts[p_idx]):
-                cb = np.random.randint(2, 16)
-                dmr = round(np.random.uniform(0.1, 0.95), 2)
-                cn = round(cb * (1 - dmr), 2)
-                
-                if cn >= 12:
-                    zone = "Zone D - Traitement"
-                elif cn >= 8:
-                    zone = "Zone C - Surveillance"
-                elif cn >= 4:
-                    zone = "Zone B - Vigilance"
-                else:
-                    zone = "Zone A - Optimisation"
+    # Lecture directe du fichier Excel réel
+    df = pd.read_excel("projet1.xlsx")
+    df.columns = df.columns.str.strip()
+    df = df.dropna(how='all')
 
-                records.append({
-                    "id": id_counter,
-                    "code_risque": f"R{id_counter}",
-                    "processus": proc,
-                    "sous_processus": f"Sous-processus {i%3 + 1}",
-                    "description": f"Risque opérationnel sur {proc.split('-')[1].strip()}",
-                    "cause": "Procédure ou contrôle inadéquat",
-                    "consequence": "Impact financier ou délai",
-                    "criticite_brute": cb,
-                    "dmr": dmr,
-                    "criticite_nette": cn,
-                    "zone": zone,
-                    "statut": "VALIDE",
-                    "declared_by": "System_Import",
-                    "created_at": "2026-01-15"
-                })
-                id_counter += 1
-        df = pd.DataFrame(records)
-
-    # Standardisation garantie des colonnes
+    # Mapping dynamique et sécurisé des colonnes de votre Excel
     col_map = {}
     for col in df.columns:
         c_low = str(col).lower()
-        if 'code' in c_low or 'risque' in c_low or 'id' in c_low:
-            col_map['code_col'] = col
-        elif 'sous' in c_low:
+        if 'code' in c_low or 'id' in c_low or 'risque' in c_low:
+            if 'code_col' not in col_map: col_map['code_col'] = col
+        if 'sous' in c_low:
             col_map['sproc_col'] = col
         elif 'processus' in c_low or 'proc' in c_low:
-            col_map['proc_col'] = col
+            if 'proc_col' not in col_map: col_map['proc_col'] = col
         elif 'critic' in c_low or 'critité' in c_low:
-            col_map['crit_col'] = col
+            if 'crit_col' not in col_map: col_map['crit_col'] = col
         elif 'dmr' in c_low or 'maitrise' in c_low:
-            col_map['dmr_col'] = col
+            if 'dmr_col' not in col_map: col_map['dmr_col'] = col
         elif 'zone' in c_low:
-            col_map['zone_col'] = col
+            if 'zone_col' not in col_map: col_map['zone_col'] = col
 
+    # Normalisation stricte pour l'affichage
     df['code_col'] = df[col_map.get('code_col', df.columns[0])].astype(str)
     df['proc_col'] = df[col_map.get('proc_col', df.columns[1])].astype(str)
     
@@ -143,14 +99,14 @@ def load_and_prep_data():
         df['sproc_col'] = "Général"
 
     if 'crit_col' in col_map:
-        df['Criticite_Num'] = pd.to_numeric(df[col_map['crit_col']], errors='coerce').fillna(5)
+        df['Criticite_Num'] = pd.to_numeric(df[col_map['crit_col']], errors='coerce').fillna(0)
     else:
-        df['Criticite_Num'] = 5.0
+        df['Criticite_Num'] = 0.0
 
     if 'dmr_col' in col_map:
-        df['DMR_Num'] = pd.to_numeric(df[col_map['dmr_col']], errors='coerce').fillna(0.5)
+        df['DMR_Num'] = pd.to_numeric(df[col_map['dmr_col']], errors='coerce').fillna(0)
     else:
-        df['DMR_Num'] = 0.5
+        df['DMR_Num'] = 0.0
         
     if df['DMR_Num'].max() > 1:
         df['DMR_Num'] = df['DMR_Num'] / 100.0
@@ -165,7 +121,7 @@ def load_and_prep_data():
     if "statut" not in df.columns:
         df["statut"] = "VALIDE"
     if "declared_by" not in df.columns:
-        df["declared_by"] = "System_Import"
+        df["declared_by"] = "projet1.xlsx"
     if "created_at" not in df.columns:
         df["created_at"] = "2026-01-15"
 
@@ -175,7 +131,7 @@ st.session_state.df_carto = load_and_prep_data()
 
 if "audit_trail" not in st.session_state:
     st.session_state.audit_trail = [
-        {"date": "2026-08-01 09:00", "user": "Admin", "action": "Initialisation du système", "details": "Importation officielle des 159 risques v1.0"},
+        {"date": "2026-08-01 09:00", "user": "Admin", "action": "Initialisation du système", "details": f"Importation directe de projet1.xlsx ({len(st.session_state.df_carto)} risques)"},
         {"date": "2026-08-05 14:20", "user": "Auditeur_Principal", "action": "Validation globale", "details": "Cartographie officielle validée"}
     ]
 
@@ -202,12 +158,12 @@ st.session_state.user_role = role_selected
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔍 Filtres Globaux")
 
-# 1. Filtre Processus
+# 1. Filtre Processus issus de projet1.xlsx
 raw_procs = st.session_state.df_carto["proc_col"].dropna().unique()
 all_procs = sorted([str(p) for p in raw_procs])
 selected_procs = st.sidebar.multiselect("Filtrer par Processus:", options=all_procs)
 
-# 2. Filtre Sous-Processus
+# 2. Filtre Sous-Processus issus de projet1.xlsx
 if selected_procs:
     filtered_sproc_df = st.session_state.df_carto[st.session_state.df_carto["proc_col"].astype(str).isin(selected_procs)]
 else:
@@ -256,7 +212,7 @@ if menu == "🏠 Dashboard":
     attente_val = len(st.session_state.df_carto[st.session_state.df_carto["statut"] == "EN_ATTENTE"])
     
     c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Risques Filtrés</div><div class="kpi-value">{total_risques}</div></div>', unsafe_allow_html=True)
+    c1.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Risques (Fichier)</div><div class="kpi-value">{total_risques}</div></div>', unsafe_allow_html=True)
     c2.markdown(f'<div class="kpi-card"><div class="kpi-title">Processus Sélectionnés</div><div class="kpi-value">{nb_processus}</div></div>', unsafe_allow_html=True)
     c3.markdown(f'<div class="kpi-card"><div class="kpi-title">Risques Critiques (Zone D)</div><div class="kpi-value" style="color:#D9534F;">{crit_critiques}</div></div>', unsafe_allow_html=True)
     c4.markdown(f'<div class="kpi-card"><div class="kpi-title">VaR Globale (95%)</div><div class="kpi-value">{var_95:,.1f}</div></div>', unsafe_allow_html=True)
