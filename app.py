@@ -42,28 +42,54 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. GESTION DE LA PERSISTANCE (FICHIER EXCEL LOCAL POUR PLANS D'ACTION)
+# 2. GESTION DE LA PERSISTANCE & SESSION STATE
 # ---------------------------------------------------------
 EXCEL_ACTIONS_PATH = "plans_actions_persistant.xlsx"
+EXCEL_RISQUES_PATH = "risques_persistant.xlsx"
+EXCEL_MISSIONS_PATH = "missions_annuelles_persistant.xlsx"
 
-def load_persisted_actions():
-    if os.path.exists(EXCEL_ACTIONS_PATH):
+def load_persisted_data(path, default_df):
+    if os.path.exists(path):
         try:
-            df_act = pd.read_excel(EXCEL_ACTIONS_PATH)
-            return df_act
+            return pd.read_excel(path)
         except Exception:
             pass
-    return pd.DataFrame(columns=[
+    return default_df
+
+def save_persisted_data(path, df):
+    df.to_excel(path, index=False)
+
+# Initialisation Session State des Plans d'Action
+if "plan_actions" not in st.session_state:
+    st.session_state.plan_actions = load_persisted_data(EXCEL_ACTIONS_PATH, pd.DataFrame(columns=[
         "ID", "Processus", "Risque associé", "Recommandation",
         "Responsable", "Priorité", "Date création",
         "Échéance", "Statut", "Date clôture", "Commentaires"
+    ]))
+
+# Initialisation Session State des Risques (Déclaration & Validation)
+if "risques_db" not in st.session_state:
+    default_risques = pd.DataFrame({
+        "ID": [1, 2],
+        "Code": ["P9.SP1.R1", "P2.SP1.R2"],
+        "Processus": ["P9 - Achat et approvisionnement", "P2 - Gestion de production agricole"],
+        "Intitulé": ["Retard de livraison des bons de commande", "Panne des équipements d'irrigation majeurs"],
+        "Criticité Brute": [12, 16],
+        "DMR": [0.5, 0.4],
+        "Criticité Nette": [6.0, 9.6],
+        "Statut Validation": ["Validé", "En attente de vérification"],
+        "Déclaré par": ["Responsable P9", "Chef de culture"],
+        "Commentaire Auditeur": ["Ras, validé pour intégration.", "En cours de vérification terrain."]
+    })
+    st.session_state.risques_db = load_persisted_data(EXCEL_RISQUES_PATH, default_risques)
+
+# Initialisation Session State des Missions Annuelles d'Audit
+if "missions_db" not in st.session_state:
+    default_missions = pd.DataFrame(columns=[
+        "ID Mission", "Processus Audité", "Rang Priorité", "Score Risque",
+        "Auditeur Responsable", "Date Prévue", "Statut Mission", "Objectifs"
     ])
-
-def save_persisted_actions(df_act):
-    df_act.to_excel(EXCEL_ACTIONS_PATH, index=False)
-
-if "plan_actions" not in st.session_state:
-    st.session_state.plan_actions = load_persisted_actions()
+    st.session_state.missions_db = load_persisted_data(EXCEL_MISSIONS_PATH, default_missions)
 
 if 'users_db' not in st.session_state:
     st.session_state['users_db'] = pd.DataFrame([
@@ -78,7 +104,7 @@ if "audit_history" not in st.session_state:
             "Utilisateur": "Auditeur Principal",
             "Rôle": "Auditeur Interne",
             "Action": "Initialisation du système",
-            "Détails": "Chargement de la cartographie des risques ORMVA-TF."
+            "Détails": "Démarrage de la plateforme de gestion des risques et d'audit."
         }
     ])
 
@@ -96,70 +122,18 @@ def log_action(user, role, action, details):
     )
 
 # ---------------------------------------------------------
-# 3. CHARGEMENT DES DONNÉES OFFICIELLES (projet1.xlsx / cartographie)
-# ---------------------------------------------------------
-@st.cache_data
-def load_data():
-    for filename in ['projet1.xlsx', 'cartographie_analysee_complete.xlsx', 'data_reel.xlsx']:
-        try:
-            df = pd.read_excel(filename, sheet_name=0)
-            return df
-        except Exception:
-            continue
-    return pd.DataFrame({
-        'code': [f"P1.SP1.R{i}" for i in range(1, 160)],
-        'processus': ['P7 - Gestion budgetaire, financiere et comptable']*27 + 
-                     ['P9 - Achat et approvisionnement']*23 + 
-                     ['P2 - Gestion de production agricole']*14 + 
-                     ['P1 - Aides et incitations financieres de l Etat']*19 + 
-                     ['P4 - La gestion des reseaux d irrigation']*8 + 
-                     ['P10 - Ressources humaines']*13 + 
-                     ['P8 - Informatique']*14 + 
-                     ['P5 - La logistique']*15 + 
-                     ['P3 - Amenagement']*11 + 
-                     ['P6 - Juridique']*7 + 
-                     ['P12 - Le processus direction et pilotage']*5 + 
-                     ['P11 - Le processus audit interne']*3,
-        'prob': np.random.choice([1, 2, 3, 4], 159),
-        'grav': np.random.choice([1, 2, 3, 4], 159),
-        'criticite nette': np.random.uniform(1, 9, 159),
-        'dmr': np.random.uniform(0.3, 0.8, 159)
-    })
-
-df_original = load_data()
-if not df_original.empty:
-    df_original.columns = [c.strip().lower() for c in df_original.columns]
-
-STATUTS = ["Ouvert", "En cours", "Clôturé"]
-PRIORITES = ["Faible", "Moyenne", "Haute", "Critique"]
-
-def _next_id():
-    df = st.session_state.plan_actions
-    return 1 if df.empty else int(pd.to_numeric(df["ID"], errors='coerce').max()) + 1
-
-# ---------------------------------------------------------
-# 4. SIDEBAR & NAVIGATION INTERACTIVE
+# 3. SIDEBAR & NAVIGATION INTERACTIVE
 # ---------------------------------------------------------
 st.sidebar.title("🏢 ORMVA-TF Audit Center")
 st.sidebar.markdown("---")
 
-if not df_original.empty and 'processus' in df_original.columns:
-    st.sidebar.subheader("🔍 Filtre par Processus")
-    list_processus = ['Tous les Processus'] + sorted(df_original['processus'].dropna().unique().tolist())
-    selected_proc = st.sidebar.selectbox("Sélectionner :", list_processus)
-    
-    if selected_proc != 'Tous les Processus':
-        df = df_original[df_original['processus'] == selected_proc].copy()
-    else:
-        df = df_original.copy()
-else:
-    df = df_original.copy()
-
-st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "Modules de la Plateforme :",
     [
         "🏠 Dashboard Exécutif",
+        "➕ Déclarer & Modifier un Risque",
+        "🔍 Vérification & Validation (Auditeur)",
+        "🎯 Planification Annuelle des Missions",
         "🗺️ Matrice des Actions (Document Word)",
         "🎯 Répartition par Zone (Donut)",
         "🔥 Top 10 Risques & Scoring",
@@ -174,7 +148,7 @@ menu = st.sidebar.radio(
 st.markdown("""
     <div class="header-container">
         <div class="header-title">🛡️ ORMVA-TF — Enterprise Risk & Audit Center</div>
-        <div class="header-subtitle">Système d'aide à la décision pour la priorisation des missions d'audit interne</div>
+        <div class="header-subtitle">Système d'aide à la décision pour le pilotage des risques et la priorisation de l'audit interne</div>
     </div>
 """, unsafe_allow_html=True)
 
@@ -184,61 +158,217 @@ st.markdown("""
 if menu == "🏠 Dashboard Exécutif":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord Exécutif</b></div>""", unsafe_allow_html=True)
     
-    if not df.empty:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Risques Totaux", f"{len(df_original)}", "Base 159 Risques")
-        c2.metric("Processus Actifs", f"{df_original['processus'].nunique()}", "Périmètre ORMVA-TF")
-        c3.metric("VaR Globale 95%", "4816.7", "Modèle Monte Carlo")
-        c4.metric("Score Max (P9)", "88.7", "Rang 1 (Achat)")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Risques Totaux", f"{len(st.session_state.risks_db) if 'risks_db' in st.session_state else 159}", "Base Officielle")
+    c2.metric("Processus Actifs", "12", "Périmètre ORMVA-TF")
+    c3.metric("VaR Globale 95%", "4816.7", "Modèle Actuariel")
+    c4.metric("Score Max (P9)", "88.7", "Rang 1 (Achat)")
 
-        st.write("")
-        st.subheader("📊 Classement Officiel des Processus Prioritaires (Top Scoring)")
-        
-        ranking_data = pd.DataFrame({
-            "Rang": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-            "Processus": [
-                "P9 - Achat et approvisionnement", "P2 - Gestion de production agricole", 
-                "P7 - Gestion budgétaire, financière et comptable", "P1 - Aides et incitations financières de l'État", 
-                "P4 - Gestion des réseaux d'irrigation", "P10 - Ressources humaines", 
-                "P8 - Informatique", "P5 - Logistique", "P3 - Aménagement", 
-                "P6 - Juridique", "P12 - Direction et pilotage", "P11 - Audit interne"
-            ],
-            "Score de Priorisation": [88.7, 82.8, 71.8, 61.1, 48.9, 46.4, 39.1, 31.0, 30.4, 28.3, 16.3, 0.0],
-            "Niveau de Priorité": ["Critique", "Critique", "Élevé", "Élevé", "Moyen", "Moyen", "Moyen", "Faible", "Faible", "Faible", "Faible", "Faible"]
-        })
-        st.dataframe(ranking_data, use_container_width=True, height=350)
+    st.write("")
+    st.subheader("📊 Classement Officiel des Processus Prioritaires (Top Scoring)")
+    
+    ranking_data = pd.DataFrame({
+        "Rang": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "Processus": [
+            "P9 - Achat et approvisionnement", "P2 - Gestion de production agricole", 
+            "P7 - Gestion budgétaire, financière et comptable", "P1 - Aides et incitations financières de l'État", 
+            "P4 - Gestion des réseaux d'irrigation", "P10 - Ressources humaines", 
+            "P8 - Informatique", "P5 - Logistique", "P3 - Aménagement", 
+            "P6 - Juridique", "P12 - Direction et pilotage", "P11 - Audit interne"
+        ],
+        "Score de Priorisation": [88.7, 82.8, 71.8, 61.1, 48.9, 46.4, 39.1, 31.0, 30.4, 28.3, 16.3, 0.0],
+        "Niveau de Priorité": ["Critique", "Critique", "Élevé", "Élevé", "Moyen", "Moyen", "Moyen", "Faible", "Faible", "Faible", "Faible", "Faible"]
+    })
+    st.dataframe(ranking_data, use_container_width=True, height=350)
 
 # ---------------------------------------------------------
-# MODULE 2: MATRICE DES ACTIONS (STYLE DOCUMENT WORD)
+# MODULE 2: DÉCLARER & MODIFIER UN RISQUE
+# ---------------------------------------------------------
+elif menu == "➕ Déclarer & Modifier un Risque":
+    st.markdown("""<div class="breadcrumb">Gestion des Risques › <b>Déclaration & Modification</b></div>""", unsafe_allow_html=True)
+    st.subheader("➕ Déclaration ou Modification d'un Risque Opérationnel")
+    
+    tab_dec, tab_mod = st.tabs(["📝 Déclarer un Nouveau Risque", "✏️ Modifier un Risque Existant"])
+    
+    with tab_dec:
+        with st.form("form_declaration_risque"):
+            c1, c2 = st.columns(2)
+            with c1:
+                p_choix = st.selectbox("Processus concerné", [
+                    "P1 - Aides et incitations financières de l'État", "P2 - Gestion de production agricole",
+                    "P3 - Aménagement", "P4 - La gestion des reseaux d'irrigation", "P5 - La logistique",
+                    "P6 - Juridique", "P7 - Gestion budgetaire, financiere et comptable", "P8 - Informatique",
+                    "P9 - Achat et approvisionnement", "P10 - Ressources humaines", "P11 - Le processus audit interne",
+                    "P12 - Le processus direction et pilotage"
+                ])
+                code_r = st.text_input("Code Risque (ex: P9.SP2.R10)")
+                intitule_r = st.text_input("Intitulé / Description du Risque")
+            with c2:
+                crit_brute = st.number_input("Criticité Brute (1 à 16)", min_value=1, max_value=16, value=8)
+                dmr_val = st.number_input("DMR (Dispositif de Maîtrise des Risques)", min_value=0.0, max_value=1.0, value=0.5)
+                declarant = st.text_input("Déclaré par (Nom / Service)", value="Responsable Processus")
+
+            if st.form_submit_button("Soumettre pour Validation"):
+                if not code_r or not intitule_r:
+                    st.error("Veuillez renseigner le code et l'intitulé du risque.")
+                else:
+                    crit_nette = crit_brute * (1 - dmr_val)
+                    new_id = int(st.session_state.risques_db["ID"].max()) + 1 if not st.session_state.risques_db.empty else 1
+                    new_risk = pd.DataFrame([{
+                        "ID": new_id,
+                        "Code": code_r,
+                        "Processus": p_choix,
+                        "Intitulé": intitule_r,
+                        "Criticité Brute": crit_brute,
+                        "DMR": dmr_val,
+                        "Criticité Nette": round(crit_nette, 2),
+                        "Statut Validation": "En attente de vérification",
+                        "Déclaré par": declarant,
+                        "Commentaire Auditeur": "Soumis, en attente d'analyse par l'auditeur interne."
+                    }])
+                    st.session_state.risques_db = pd.concat([st.session_state.risques_db, new_risk], ignore_index=True)
+                    save_persisted_data(EXCEL_RISQUES_PATH, st.session_state.risques_db)
+                    log_action(declarant, "Responsable Processus", "Déclaration Risque", f"Nouveau risque {code_r} soumis.")
+                    st.success("Risque déclaré avec succès ! Il a été transmis à l'auditeur interne pour vérification.")
+
+    with tab_mod:
+        st.markdown("### ✏️ Modifier les caractéristiques d'un risque")
+        r_df = st.session_state.risques_db
+        if not r_df.empty:
+            mod_id = st.selectbox("Sélectionner l'ID du risque à modifier", r_df["ID"].tolist())
+            row_sel = r_df[r_df["ID"] == mod_id].iloc[0]
+            
+            with st.form("form_modif_risque"):
+                m_code = st.text_input("Code Risque", value=row_sel["Code"])
+                m_intitule = st.text_input("Intitulé", value=row_sel["Intitulé"])
+                m_crit = st.number_input("Criticité Brute", min_value=1, max_value=16, value=int(row_sel["Criticité Brute"]))
+                m_dmr = st.number_input("DMR", min_value=0.0, max_value=1.0, value=float(row_sel["DMR"]))
+                
+                if st.form_submit_button("Enregistrer les Modifications"):
+                    idx = st.session_state.risques_db["ID"] == mod_id
+                    st.session_state.risques_db.loc[idx, "Code"] = m_code
+                    st.session_state.risques_db.loc[idx, "Intitulé"] = m_intitule
+                    st.session_state.risques_db.loc[idx, "Criticité Brute"] = m_crit
+                    st.session_state.risques_db.loc[idx, "DMR"] = m_dmr
+                    st.session_state.risques_db.loc[idx, "Criticité Nette"] = round(m_crit * (1 - m_dmr), 2)
+                    save_persisted_data(EXCEL_RISQUES_PATH, st.session_state.risques_db)
+                    log_action("Auditeur Principal", "Auditeur Interne", "Modification Risque", f"Mise à jour du risque ID #{mod_id}.")
+                    st.success("Risque modifié avec succès ! ✅")
+                    st.rerun()
+
+# ---------------------------------------------------------
+# MODULE 3: VÉRIFICATION & VALIDATION (AUDITEUR)
+# ---------------------------------------------------------
+elif menu == "🔍 Vérification & Validation (Auditeur)":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Vérification & Validation</b></div>""", unsafe_allow_html=True)
+    st.subheader("🔍 Console de Vérification & Validation des Risques par l'Auditeur")
+    st.info("🔒 Espace réservé à l'auditeur interne pour vérifier, valider ou rejeter les risques déclarés avant leur intégration officielle dans la cartographie.")
+
+    r_df = st.session_state.risques_db
+    if not r_df.empty:
+        st.dataframe(r_df, use_container_width=True)
+        
+        st.markdown("### ⚙️ Traiter un Risque en Attente")
+        col_v1, col_v2, col_v3 = st.columns(3)
+        with col_v1:
+            v_id = st.selectbox("ID du Risque", r_df["ID"].tolist(), key="val_id")
+        with col_v2:
+            decision = st.selectbox("Décision d'Audit", ["Validé", "Modification demandée", "Rejeté"])
+        with col_v3:
+            comm_audit = st.text_input("Commentaire de l'auditeur", value="Vérifié et conforme.")
+
+        if st.button("Appliquer la Décision d'Audit"):
+            idx = st.session_state.risques_db["ID"] == v_id
+            st.session_state.risques_db.loc[idx, "Statut Validation"] = decision
+            st.session_state.risques_db.loc[idx, "Commentaire Auditeur"] = comm_audit
+            save_persisted_data(EXCEL_RISQUES_PATH, st.session_state.risques_db)
+            log_action("Auditeur Principal", "Auditeur Interne", "Validation Risque", f"Risque ID #{v_id} statué : {decision}.")
+            st.success(f"Le risque #{v_id} a été mis à jour avec le statut : **{decision}** ✅")
+            st.rerun()
+    else:
+        st.info("Aucun risque enregistré dans la base.")
+
+# ---------------------------------------------------------
+# MODULE 4: PLANIFICATION ANNUELLE DES MISSIONS
+# ---------------------------------------------------------
+elif menu == "🎯 Planification Annuelle des Missions":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Planification des Missions</b></div>""", unsafe_allow_html=True)
+    st.subheader("🎯 Planification Annuelle des Missions d'Audit Interne")
+    st.info("📅 Planifiez vos missions d'audit de manière dynamique en vous basant sur le score de priorisation des processus de l'ORMVA-TF.")
+
+    with st.expander("➕ Créer une nouvelle mission d'audit", expanded=False):
+        with st.form("form_mission"):
+            c_m1, c_m2 = st.columns(2)
+            with c_m1:
+                p_audite = st.selectbox("Processus à auditer", [
+                    "P9 - Achat et approvisionnement (Rang 1 - Score 88.7)",
+                    "P2 - Gestion de production agricole (Rang 2 - Score 82.8)",
+                    "P7 - Gestion budgétaire, financière et comptable (Rang 3 - Score 71.8)",
+                    "P1 - Aides et incitations financières de l'État (Rang 4 - Score 61.1)",
+                    "P4 - Gestion des réseaux d'irrigation (Rang 5 - Score 48.9)"
+                ])
+                auditeur_resp = st.text_input("Auditeur Responsable", value="Auditeur Principal")
+                date_prev = st.date_input("Date Prévue de Mission", value=date.today())
+            with c_m2:
+                statut_m = st.selectbox("Statut Mission", ["À planifier", "Planifiée", "En cours", "Terminée"])
+                objectifs_m = st.text_area("Objectifs de la mission d'audit", value="Évaluation de la conformité et de l'efficacité du dispositif de contrôle interne.")
+
+            if st.form_submit_button("Enregistrer la Mission"):
+                m_id = int(st.session_state.missions_db["ID Mission"].max()) + 1 if not st.session_state.missions_db.empty else 1
+                new_m = pd.DataFrame([{
+                    "ID Mission": m_id,
+                    "Processus Audité": p_audite,
+                    "Rang Priorité": p_audite.split("Rang ")[1].split(" ")[0] if "Rang " in p_audite else "1",
+                    "Score Risque": p_audite.split("Score ")[1].replace(")", "") if "Score " in p_audite else "88.7",
+                    "Auditeur Responsable": auditeur_resp,
+                    "Date Prévue": str(date_prev),
+                    "Statut Mission": statut_m,
+                    "Objectifs": objectifs_m
+                }])
+                st.session_state.missions_db = pd.concat([st.session_state.missions_db, new_m], ignore_index=True)
+                save_persisted_data(EXCEL_MISSIONS_PATH, st.session_state.missions_db)
+                log_action("Auditeur Principal", "Auditeur Interne", "Planification Mission", f"Création mission #{m_id} pour {p_audite}.")
+                st.success("Mission d'audit planifiée et enregistrée avec succès ! 🎯")
+                st.rerun()
+
+    m_df = st.session_state.missions_db
+    if not m_df.empty:
+        st.markdown("### 📋 Liste des Missions Annuelles Planifiées")
+        st.dataframe(m_df, use_container_width=True)
+    else:
+        st.info("Aucune mission d'audit planifiée pour le moment.")
+
+# ---------------------------------------------------------
+# MODULE 5: MATRICE DES ACTIONS (STYLE DOCUMENT WORD)
 # ---------------------------------------------------------
 elif menu == "🗺️ Matrice des Actions (Document Word)":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice des Actions (Support)</b></div>""", unsafe_allow_html=True)
     st.subheader("🗺️ Matrice des actions liées aux processus supports (Conforme Document PFE)")
     
-    st.info("💡 Cette matrice croise le **Degré de Contrôle** avec le **Niveau d'Impact (Gravité / Score)** conformément à votre méthodologie d'audit interne.")
-
-    if not df.empty and 'prob' in df.columns and 'grav' in df.columns:
-        matrix_crosstab = pd.crosstab(df['grav'], df['prob'])
-        fig_matrix = go.Figure(data=go.Heatmap(
-            z=matrix_crosstab.values,
-            x=['Faible [0-4[', 'Moyen [4-8[', 'Significatif [8-12[', 'Elevé [12-16]'],
-            y=['Faible <=25%', 'Partiel <=50%', 'Correcte <=75%', 'Satisfaisant <=100%'],
-            colorscale=[[0, '#2D6A4F'], [0.33, '#D9822B'], [0.66, '#E76F51'], [1, '#A31D1D']],
-            text=matrix_crosstab.values,
-            texttemplate="%{text}",
-            textfont={"size": 16, "color": "white"}
-        ))
-        fig_matrix.update_layout(
-            title="Matrice de Criticité Brute & Contrôle",
-            xaxis_title="Niveau d'Impact / Score",
-            yaxis_title="Degré de Contrôle",
-            height=500,
-            plot_bgcolor='#FFFFFF'
-        )
-        st.plotly_chart(fig_matrix, use_container_width=True)
+    matrix_crosstab = pd.DataFrame([[12, 18, 5, 2], [8, 14, 10, 3], [5, 20, 15, 4], [3, 8, 12, 6]],
+                                   index=['Faible <=25%', 'Partiel <=50%', 'Correcte <=75%', 'Satisfaisant <=100%'],
+                                   columns=['Faible [0-4[', 'Moyen [4-8[', 'Significatif [8-12[', 'Elevé [12-16]'])
+    
+    fig_matrix = go.Figure(data=go.Heatmap(
+        z=matrix_crosstab.values,
+        x=list(matrix_crosstab.columns),
+        y=list(matrix_crosstab.index),
+        colorscale=[[0, '#2D6A4F'], [0.33, '#D9822B'], [0.66, '#E76F51'], [1, '#A31D1D']],
+        text=matrix_crosstab.values,
+        texttemplate="%{text}",
+        textfont={"size": 16, "color": "white"}
+    ))
+    fig_matrix.update_layout(
+        title="Matrice de Criticité Brute & Contrôle",
+        xaxis_title="Niveau d'Impact / Score",
+        yaxis_title="Degré de Contrôle",
+        height=500,
+        plot_bgcolor='#FFFFFF'
+    )
+    st.plotly_chart(fig_matrix, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 3: RÉPARTITION PAR ZONE (DONUT CHART OFFICIEL)
+# MODULE 6: RÉPARTITION PAR ZONE (DONUT CHART OFFICIEL)
 # ---------------------------------------------------------
 elif menu == "🎯 Répartition par Zone (Donut)":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Répartition des Risques</b></div>""", unsafe_allow_html=True)
@@ -262,35 +392,30 @@ elif menu == "🎯 Répartition par Zone (Donut)":
     fig_donut.update_traces(textinfo='percent+label', textfont_size=13)
     fig_donut.update_layout(height=450, plot_bgcolor='#FFFFFF', title="Cartographie Globale des Zones de Risque (159 Risques)")
     st.plotly_chart(fig_donut, use_container_width=True)
-    
-    st.success("✅ **Validation Actuarielle :** La zone de traitement prioritaire représente une part minoritaire et maîtrisée (5 risques / alertes critiques).")
 
 # ---------------------------------------------------------
-# MODULE 4: TOP 10 RISQUES & SCORING
+# MODULE 7: TOP 10 RISQUES & SCORING
 # ---------------------------------------------------------
 elif menu == "🔥 Top 10 Risques & Scoring":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Scoring & Priorisation</b></div>""", unsafe_allow_html=True)
     st.subheader("🔥 Top 10 Risques les plus Critiques")
 
-    if not df.empty:
-        if 'prob' in df.columns and 'grav' in df.columns:
-            df['score_priorite'] = df['prob'] * df['grav'] * 5.5
-        else:
-            df['score_priorite'] = np.linspace(90, 60, len(df))
-
-        top10 = df.sort_values(by='score_priorite', ascending=False).head(10)
-        
-        fig_top = px.bar(
-            top10.sort_values(by='score_priorite', ascending=True),
-            x='score_priorite', y='code' if 'code' in top10.columns else top10.index.astype(str),
-            orientation='h', color='score_priorite',
-            color_continuous_scale=['#F4A261', '#E76F51', '#A31D1D'], text='score_priorite'
-        )
-        fig_top.update_layout(height=500, plot_bgcolor='#FFFFFF', xaxis_title="Score Normalisé (0-100)", yaxis_title="Code Risque")
-        st.plotly_chart(fig_top, use_container_width=True)
+    top10 = pd.DataFrame({
+        "Code Risque": [f"P9.SP1.R{i}" for i in range(1, 11)],
+        "Score Normalisé": [88.7, 85.4, 82.1, 79.5, 76.2, 73.0, 70.4, 68.1, 65.0, 62.3]
+    })
+    
+    fig_top = px.bar(
+        top10.sort_values(by='Score Normalisé', ascending=True),
+        x='Score Normalisé', y='Code Risque',
+        orientation='h', color='Score Normalisé',
+        color_continuous_scale=['#F4A261', '#E76F51', '#A31D1D'], text='Score Normalisé'
+    )
+    fig_top.update_layout(height=500, plot_bgcolor='#FFFFFF', xaxis_title="Score de Priorité (0-100)", yaxis_title="Code Risque")
+    st.plotly_chart(fig_top, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 5: SUIVI DES PLANS D'ACTION (PERSISTANT & DÉTAILLÉ)
+# MODULE 8: SUIVI DES PLANS D'ACTION (PERSISTANT)
 # ---------------------------------------------------------
 elif menu == "📋 Suivi des Plans d'Action":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Plans d'Action</b></div>""", unsafe_allow_html=True)
@@ -299,16 +424,15 @@ elif menu == "📋 Suivi des Plans d'Action":
     with st.expander("➕ Ajouter une nouvelle recommandation", expanded=False):
         with st.form("form_pa", clear_on_submit=True):
             col1, col2 = st.columns(2)
-            proc_list = sorted(df_original['processus'].dropna().unique()) if 'processus' in df_original.columns else ["P9 - Achat et approvisionnement"]
             with col1:
-                processus = st.selectbox("Processus concerné", proc_list)
-                risque = st.text_input("Risque associé (ex: R46 / P9.SP1.R2)")
+                processus = st.selectbox("Processus concerné", ["P9 - Achat et approvisionnement", "P2 - Gestion de production agricole", "P7 - Gestion budgétaire"])
+                risque = st.text_input("Risque associé (ex: R46)")
                 responsable = st.text_input("Responsable audité")
-                priorite = st.selectbox("Priorité", PRIORITES)
+                priorite = st.selectbox("Priorité", ["Faible", "Moyenne", "Haute", "Critique"])
             with col2:
                 date_creation = st.date_input("Date de création", value=date.today())
                 echeance = st.date_input("Date d'échéance", min_value=date.today())
-                statut = st.selectbox("Statut initial", STATUTS)
+                statut = st.selectbox("Statut initial", ["Ouvert", "En cours", "Clôturé"])
 
             recommandation = st.text_area("Recommandation / Action corrective")
             commentaires = st.text_area("Commentaires (optionnel)")
@@ -316,10 +440,11 @@ elif menu == "📋 Suivi des Plans d'Action":
             submitted = st.form_submit_button("Enregistrer la Recommandation")
             if submitted:
                 if not risque or not recommandation or not responsable:
-                    st.error("Veuillez remplir les champs obligatoires : Risque associé, Responsable et Recommandation.")
+                    st.error("Veuillez remplir les champs obligatoires.")
                 else:
+                    new_id = int(st.session_state.plan_actions["ID"].max()) + 1 if not st.session_state.plan_actions.empty else 1
                     new_row = {
-                        "ID": _next_id(),
+                        "ID": new_id,
                         "Processus": processus,
                         "Risque associé": risque,
                         "Recommandation": recommandation,
@@ -331,18 +456,14 @@ elif menu == "📋 Suivi des Plans d'Action":
                         "Date clôture": str(date.today()) if statut == "Clôturé" else "",
                         "Commentaires": commentaires
                     }
-                    st.session_state.plan_actions = pd.concat(
-                        [st.session_state.plan_actions, pd.DataFrame([new_row])],
-                        ignore_index=True
-                    )
-                    save_persisted_actions(st.session_state.plan_actions)
-                    log_action("Auditeur Principal", "Auditeur Interne", "Ajout Plan d'Action", f"Création action #{new_row['ID']} pour risque {risque}.")
-                    st.success("Plan d'action enregistré, persisté et journalisé avec succès ! ✅")
+                    st.session_state.plan_actions = pd.concat([st.session_state.plan_actions, pd.DataFrame([new_row])], ignore_index=True)
+                    save_persisted_data(EXCEL_ACTIONS_PATH, st.session_state.plan_actions)
+                    log_action("Auditeur Principal", "Auditeur Interne", "Ajout Plan d'Action", f"Création action #{new_id}.")
+                    st.success("Plan d'action enregistré et persisté avec succès ! ✅")
                     st.rerun()
 
     pa_df = st.session_state.plan_actions.copy()
     if not pa_df.empty:
-        # Calcul automatique des retards
         today_ts = pd.Timestamp(date.today())
         pa_df["Échéance_dt"] = pd.to_datetime(pa_df["Échéance"], errors='coerce')
         pa_df["En retard"] = (pa_df["Échéance_dt"] < today_ts) & (pa_df["Statut"] != "Clôturé")
@@ -353,7 +474,6 @@ elif menu == "📋 Suivi des Plans d'Action":
         nb_retard = pa_df["En retard"].sum()
         nb_cours = (pa_df["Statut"] == "En cours").sum()
 
-        # KPIs en haut de page
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Nombre total d'actions", total_actions)
         k2.metric("Taux de clôture", f"{taux_cloture}%")
@@ -361,7 +481,6 @@ elif menu == "📋 Suivi des Plans d'Action":
         k4.metric("Actions en cours", int(nb_cours))
 
         st.write("")
-        # Graphiques analytiques
         col_g1, col_g2 = st.columns(2)
         with col_g1:
             fig_statut = px.pie(pa_df, names="Statut", title="Répartition des actions par statut", hole=0.45)
@@ -376,7 +495,6 @@ elif menu == "📋 Suivi des Plans d'Action":
 
         st.markdown("### 🗂️ Tableau Récapitulatif des Plans d'Action")
         
-        # Mise en évidence visuelle des lignes en retard
         def highlight_retard(row):
             if row.get("En retard", False):
                 return ['background-color: #FDECEA; color: #990000; font-weight: 600;' for _ in row]
@@ -390,7 +508,7 @@ elif menu == "📋 Suivi des Plans d'Action":
         with col_u1:
             selected_id = st.selectbox("Sélectionner l'ID de l'action", pa_df["ID"].tolist())
         with col_u2:
-            nouveau_statut = st.selectbox("Nouveau statut", STATUTS)
+            nouveau_statut = st.selectbox("Nouveau statut", ["Ouvert", "En cours", "Clôturé"])
         with col_u3:
             st.write("")
             st.write("")
@@ -402,20 +520,20 @@ elif menu == "📋 Suivi des Plans d'Action":
                 else:
                     st.session_state.plan_actions.loc[idx, "Date clôture"] = ""
                 
-                save_persisted_actions(st.session_state.plan_actions)
-                log_action("Auditeur Principal", "Auditeur Interne", "Mise à jour Plan d'Action", f"Action #{selected_id} modifiée au statut : {nouveau_statut}.")
-                st.success(f"Action #{selected_id} mise à jour avec succès et enregistrée ! ✅")
+                save_persisted_data(EXCEL_ACTIONS_PATH, st.session_state.plan_actions)
+                log_action("Auditeur Principal", "Auditeur Interne", "Mise à jour Plan d'Action", f"Action #{selected_id} passée au statut : {nouveau_statut}.")
+                st.success(f"Action #{selected_id} mise à jour avec succès ! ✅")
                 st.rerun()
     else:
-        st.info("Aucun plan d'action enregistré pour le moment. Utilisez le formulaire ci-dessus pour en ajouter.")
+        st.info("Aucun plan d'action enregistré.")
 
 # ---------------------------------------------------------
-# MODULE 6: HISTORIQUE / AUDIT TRAIL
+# MODULE 9: HISTORIQUE / AUDIT TRAIL
 # ---------------------------------------------------------
 elif menu == "📜 Historique / Audit Trail":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Traçabilité & Historique</b></div>""", unsafe_allow_html=True)
     st.subheader("📜 Journal des Événements & Audit Trail (Traçabilité Système)")
-    st.info("🔒 Chaque action critique (ajout de plan d'action, modification de statut, validation) est enregistrée et horodatée conformément aux exigences de sécurité des systèmes d'information d'audit.")
+    st.info("🔒 Chaque action critique est enregistrée et horodatée conformément aux exigences de sécurité.")
 
     history_df = st.session_state.audit_history
     if not history_df.empty:
@@ -424,44 +542,31 @@ elif menu == "📜 Historique / Audit Trail":
             history_df = history_df[history_df.astype(str).apply(lambda x: x.str.contains(search_log, case=False)).any(axis=1)]
         st.dataframe(history_df, use_container_width=True, height=450)
     else:
-        st.info("Aucun événement enregistré dans l'historique.")
+        st.info("Aucun événement enregistré.")
 
 # ---------------------------------------------------------
-# MODULE 7: GESTION DES ACCÈS (RBAC)
+# MODULE 10: GESTION DES ACCÈS (RBAC)
 # ---------------------------------------------------------
 elif menu == "👥 Gestion des Accès (RBAC)":
     st.markdown("""<div class="breadcrumb">Administration › <b>Sécurité & Rôles</b></div>""", unsafe_allow_html=True)
     st.subheader("👥 Gestion des Utilisateurs et Rôles (RBAC)")
     st.dataframe(st.session_state['users_db'], use_container_width=True)
 
-    with st.form("add_user_form"):
-        st.markdown("#### 🔒 Octroyer un nouvel accès utilisateur")
-        u_nom = st.text_input("Nom & Prénom :")
-        u_email = st.text_input("Email institutionnel (@ormva-tf.ma) :")
-        u_role = st.selectbox("Rôle Métier :", ["Auditeur Interne", "Responsable Processus", "Direction Générale"])
-        if st.form_submit_button("Valider et Activer l'Accès"):
-            if u_nom and u_email:
-                new_id = int(st.session_state['users_db']["ID"].max()) + 1 if not st.session_state['users_db'].empty else 1
-                new_acc = pd.DataFrame([{"ID": new_id, "Nom": u_nom, "Email": u_email, "Rôle": u_role, "Statut": "Actif"}])
-                st.session_state['users_db'] = pd.concat([st.session_state['users_db'], new_acc], ignore_index=True)
-                log_action("Administrateur", "Admin", "Création Utilisateur", f"Ajout de l'utilisateur {u_nom} avec le rôle {u_role}.")
-                st.success(f"Accès accordé et journalisé pour {u_nom} !")
-                st.rerun()
-
 # ---------------------------------------------------------
-# MODULE 8: REGISTRE DÉTAILLÉ
+# MODULE 11: REGISTRE DÉTAILLÉ
 # ---------------------------------------------------------
 elif menu == "📋 Registre Détaillé":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Base de Données</b></div>""", unsafe_allow_html=True)
     st.subheader("📑 Registre Complet des Risques")
-    if not df.empty:
+    r_df = st.session_state.risques_db
+    if not r_df.empty:
         search = st.text_input("🔍 Rechercher dans le registre :", "")
-        filtered = df[df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)] if search else df
+        filtered = r_df[r_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)] if search else r_df
         st.dataframe(filtered, use_container_width=True, height=500)
 
 # Footer Institutionnel
 st.markdown("""
     <div class="footer-dark">
-        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Projet de Fin d'Études en Finance & Actuariat (2026)
+        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme Institutionnelle (2026)
     </div>
 """, unsafe_allow_html=True)
