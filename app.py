@@ -3,280 +3,304 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import os
+from io import BytesIO
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# -------------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE
-# -------------------------------------------------------------
+# ---------------------------------------------------------
+# 1. CONFIGURATION DE LA PAGE STREAMLIT
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title="ORMVA-TF | Risk & Audit Center",
+    page_title="Cartographie & Analyse des Risques",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Style CSS personnalisé pour un rendu professionnel
 st.markdown("""
-<style>
-    :root {
-        --primary-color: #1E4620;
-        --secondary-color: #87A987;
-        --bg-light: #F4F7F4;
-        --card-bg: #FFFFFF;
-        --text-dark: #1C2826;
-        --accent-red: #D9534F;
-    }
-    
-    .stApp {
-        background-color: var(--bg-light);
-    }
-    
+    <style>
     .main-header {
-        font-size: 24px;
+        font-size: 2.2rem;
+        color: #1E3A8A;
         font-weight: 700;
-        color: var(--primary-color);
-        border-bottom: 2px solid var(--secondary-color);
-        padding-bottom: 8px;
-        margin-bottom: 20px;
+        text-align: center;
+        margin-bottom: 1.5rem;
     }
-    
-    .kpi-card {
-        background-color: var(--card-bg);
-        border-radius: 8px;
-        padding: 16px;
-        border-left: 5px solid var(--primary-color);
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    .metric-card {
+        background-color: #F8FAFC;
+        border-radius: 10px;
+        padding: 15px;
+        border-left: 5px solid #2563EB;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-    
-    .kpi-title {
-        font-size: 12px;
-        font-weight: 600;
-        color: #555555;
-        text-transform: uppercase;
-    }
-    
-    .kpi-value {
-        font-size: 24px;
-        font-weight: bold;
-        color: var(--primary-color);
-    }
-</style>
-""", unsafe_allow_html=True)
+    </style>
+""", unsafe_allow_allowed_html=True)
 
-# -------------------------------------------------------------
-# 2. CHARGEMENT STRICT DE PROJET1.XLSX
-# -------------------------------------------------------------
+# ---------------------------------------------------------
+# 2. FONCTIONS DE TRAITEMENT ET NETTOYAGE
+# ---------------------------------------------------------
 @st.cache_data
-def load_excel_data():
-    file_name = "projet1.xlsx"
-    if not os.path.exists(file_name):
-        for root, dirs, files in os.walk("."):
-            if file_name in files:
-                file_name = os.path.join(root, file_name)
-                break
+def process_data(file):
+    """
+    Charge et nettoie automatiquement les données du fichier Excel
+    """
+    df = pd.read_excel(file)
+    
+    # Standardisation des noms de colonnes
+    df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+    
+    # Supprimer les lignes vides ou sans code risque
+    df = df.dropna(subset=['code']).reset_index(drop=True)
+    
+    # Nettoyage des chaînes de caractères
+    str_cols = ['code', 'processus', 'sous_processus', 'intitule']
+    for col in str_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+    
+    if 'sous_processus' in df.columns:
+        df['sous_processus'] = df['sous_processus'].replace('nan', 'Non spécifié')
+    
+    # Conversion numérique et calculs rigoureux
+    for col in ['prob', 'grav', 'dmr']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df['criticite_brute'] = df['prob'] * df['grav']
+    df['criticite_nette'] = df['criticite_brute'] * df['dmr']
+    
+    # Catégorisation de la criticité nette
+    def categoriser_criticite(val):
+        if val <= 3:
+            return 'Faible'
+        elif val <= 6:
+            return 'Moyenne'
+        elif val <= 9:
+            return 'Élevée'
+        else:
+            return 'Critique'
+            
+    df['niveau_risque'] = df['criticite_nette'].apply(categoriser_criticite)
+    
+    # Réorganisation
+    cols_order = ['code', 'processus', 'sous_processus', 'intitule', 'prob', 'grav', 
+                  'criticite_brute', 'dmr', 'criticite_nette', 'niveau_risque']
+    
+    return df[cols_order]
 
-    if not os.path.exists(file_name):
-        st.error(f"❌ Le fichier '{file_name}' est introuvable sur le dépôt GitHub.")
-        st.stop()
+# ---------------------------------------------------------
+# 3. GENERATION DE RAPPORTS (EXCEL ET WORD)
+# ---------------------------------------------------------
+def to_excel(dataframe):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        dataframe.to_excel(writer, index=False, sheet_name='Risques_Nettoyes')
+    return output.getvalue()
 
-    df = pd.read_excel(file_name)
-    df.columns = df.columns.astype(str).str.strip()
-    df = df.dropna(how='all')
+def generate_word_report(df, stats_proc):
+    doc = Document()
+    
+    # Titre
+    title = doc.add_heading('Rapport d\'Analyse de la Cartographie des Risques', level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    doc.add_paragraph(f"Nombre total de risques analysés : {len(df)}")
+    
+    # Résumé
+    doc.add_heading('1. Synthèse Globale', level=1)
+    p = doc.add_paragraph()
+    p.add_run(f"- Criticité Nette Moyenne : {df['criticite_nette'].mean():.2f}\n")
+    p.add_run(f"- Risques critiques/élevés : {len(df[df['niveau_risque'].isin(['Élevée', 'Critique'])])}\n")
+    
+    # Tableau par processus
+    doc.add_heading('2. Statistiques par Processus', level=1)
+    table = doc.add_table(rows=1, cols=4)
+    hdr_cells = table.rows[0].cells
+    hdr_cells[0].text = 'Processus'
+    hdr_cells[1].text = 'Nbr Risques'
+    hdr_cells[2].text = 'Crit. Nette Moy.'
+    hdr_cells[3].text = 'Crit. Nette Cumulée'
+    
+    for proc, row in stats_proc.iterrows():
+        row_cells = table.add_row().cells
+        row_cells[0].text = str(proc)
+        row_cells[1].text = str(int(row['Nb_Risques']))
+        row_cells[2].text = f"{row['Criticite_Nette_Moy']:.2f}"
+        row_cells[3].text = f"{row['Criticite_Nette_Somme']:.2f}"
+        
+    buffer = BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
 
-    # Cartographie automatique des colonnes de projet1.xlsx
-    col_map = {}
-    for col in df.columns:
-        c_low = str(col).lower()
-        if 'code' in c_low or 'id' in c_low or 'risque' in c_low:
-            if 'code_col' not in col_map: col_map['code_col'] = col
-        if 'sous' in c_low:
-            col_map['sproc_col'] = col
-        elif 'processus' in c_low or 'proc' in c_low:
-            if 'proc_col' not in col_map: col_map['proc_col'] = col
-        elif 'brute' in c_low or 'critic' in c_low or 'critité' in c_low:
-            if 'crit_col' not in col_map: col_map['crit_col'] = col
-        elif 'dmr' in c_low or 'maitrise' in c_low or 'contrôle' in c_low:
-            if 'dmr_col' not in col_map: col_map['dmr_col'] = col
-        elif 'zone' in c_low:
-            if 'zone_col' not in col_map: col_map['zone_col'] = col
+# ---------------------------------------------------------
+# 4. INTERFACE UTILISATEUR (STREAMLIT MAIN)
+# ---------------------------------------------------------
+st.markdown('<div class="main-header">🛡️ Cartographie & Quantitative Risk Analytics</div>', unsafe_allow_html=True)
 
-    # Normalisation des colonnes principales
-    code_col = col_map.get('code_col', df.columns[0])
-    proc_col = col_map.get('proc_col', df.columns[1] if len(df.columns) > 1 else df.columns[0])
-    sproc_col = col_map.get('sproc_col', None)
-    crit_col = col_map.get('crit_col', None)
-    dmr_col = col_map.get('dmr_col', None)
-    zone_col = col_map.get('zone_col', None)
+# Sidebar - Chargement du fichier
+st.sidebar.header("📁 Données d'entrée")
+uploaded_file = st.sidebar.file_upload("Charger le fichier Excel (.xlsx)", type=["xlsx"])
 
-    df['Code_Display'] = df[code_col].astype(str)
-    df['Proc_Display'] = df[proc_col].astype(str)
-    df['SProc_Display'] = df[sproc_col].astype(str) if sproc_col else "Général"
+if uploaded_file is not None:
+    # Traitement automatique
+    df = process_data(uploaded_file)
+    
+    # Sidebar - Filtres
+    st.sidebar.header("🔍 Filtres Dynamiques")
+    selected_proc = st.sidebar.multiselect(
+        "Sélectionner les Processus :",
+        options=df['processus'].unique(),
+        default=df['processus'].unique()
+    )
+    
+    selected_niveau = st.sidebar.multiselect(
+        "Niveau de Risque :",
+        options=['Faible', 'Moyenne', 'Élevée', 'Critique'],
+        default=['Faible', 'Moyenne', 'Élevée', 'Critique']
+    )
+    
+    # Application des filtres
+    df_filtered = df[(df['processus'].isin(selected_proc)) & (df['niveau_risque'].isin(selected_niveau))]
+    
+    # ---------------------------------------------------------
+    # TABS DASHBOARD
+    # ---------------------------------------------------------
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Dashboard & KPIs", 
+        "🔥 Matrice des Risques", 
+        "📈 Analyse par Processus", 
+        "📋 Données & Exports"
+    ])
+    
+    # ---------------------------------------------------------
+    # TAB 1: DASHBOARD
+    # ---------------------------------------------------------
+    with tab1:
+        st.subheader("Indicateurs Clés de Performance (KPIs)")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Risques Filtrés", len(df_filtered))
+        with col2:
+            st.metric("Probabilité Moyenne", f"{df_filtered['prob'].mean():.2f} / 4")
+        with col3:
+            st.metric("Gravité Moyenne", f"{df_filtered['grav'].mean():.2f} / 4")
+        with col4:
+            st.metric("Criticité Nette Moyenne", f"{df_filtered['criticite_nette'].mean():.2f}")
+            
+        st.divider()
+        
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            # Répartition des niveaux de risques
+            fig_pie = px.pie(
+                df_filtered, 
+                names='niveau_risque', 
+                title="Répartition par Niveau de Risque",
+                color='niveau_risque',
+                color_discrete_map={'Faible':'#10B981', 'Moyenne':'#F59E0B', 'Élevée':'#EF4444', 'Critique':'#991B1B'}
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        with col_right:
+            # Distribution de la criticité nette
+            fig_hist = px.histogram(
+                df_filtered, 
+                x='criticite_nette', 
+                nbins=15, 
+                title="Distribution de la Criticité Nette",
+                color_discrete_sequence=['#2563EB']
+            )
+            fig_hist.update_layout(xaxis_title="Criticité Nette", yaxis_title="Nombre de Risques")
+            st.plotly_chart(fig_hist, use_container_width=True)
 
-    if crit_col:
-        df['CB_Num'] = pd.to_numeric(df[crit_col], errors='coerce').fillna(0)
-    else:
-        df['CB_Num'] = 0.0
+    # ---------------------------------------------------------
+    # TAB 2: MATRICE DES RISQUES (HEATMAP)
+    # ---------------------------------------------------------
+    with tab2:
+        st.subheader("Matrice Probabilité x Gravité (Heatmap)")
+        
+        # Calcul de la matrice
+        matrix_data = df_filtered.groupby(['grav', 'prob']).size().unstack(fill_value=0)
+        
+        # S'assurer que la grille 4x4 existe
+        for i in range(1, 5):
+            if i not in matrix_data.index:
+                matrix_data.loc[i] = 0
+            if i not in matrix_data.columns:
+                matrix_data[i] = 0
+        matrix_data = matrix_data.sort_index(ascending=False)[[1, 2, 3, 4]]
+        
+        fig_heatmap = px.imshow(
+            matrix_data,
+            labels=dict(x="Probabilité", y="Gravité", color="Nombre de Risques"),
+            x=['P1', 'P2', 'P3', 'P4'],
+            y=['G4', 'G3', 'G2', 'G1'],
+            color_continuous_scale="YlOrRd",
+            text_auto=True
+        )
+        fig_heatmap.update_layout(height=500)
+        st.plotly_chart(fig_heatmap, use_container_width=True)
 
-    if dmr_col:
-        df['DMR_Num'] = pd.to_numeric(df[dmr_col], errors='coerce').fillna(0)
-    else:
-        df['DMR_Num'] = 0.0
+    # ---------------------------------------------------------
+    # TAB 3: STATISTIQUES PAR PROCESSUS
+    # ---------------------------------------------------------
+    with tab3:
+        st.subheader("Analyse Comparative des Processus")
+        
+        stats_processus = df_filtered.groupby("processus").agg(
+            Nb_Risques=("code", "count"),
+            Prob_Moy=("prob", "mean"),
+            Grav_Moy=("grav", "mean"),
+            DMR_Moy=("dmr", "mean"),
+            Criticite_Nette_Moy=("criticite_nette", "mean"),
+            Criticite_Nette_Somme=("criticite_nette", "sum")
+        ).round(2).sort_values("Criticite_Nette_Somme", ascending=False)
+        
+        # Graphique des processus les plus critiques
+        fig_bar = px.bar(
+            stats_processus.reset_index(),
+            x='Criticite_Nette_Somme',
+            y='processus',
+            orientation='h',
+            title="Cumul de Criticité Nette par Processus",
+            color='Criticite_Nette_Moy',
+            color_continuous_scale='Reds'
+        )
+        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+        
+        st.dataframe(stats_processus, use_container_width=True)
 
-    if df['DMR_Num'].max() > 1:
-        df['DMR_Num'] = df['DMR_Num'] / 100.0
+    # ---------------------------------------------------------
+    # TAB 4: DONNEES ET EXPORTATIONS
+    # ---------------------------------------------------------
+    with tab4:
+        st.subheader("Consulter & Exporter les Données")
+        st.dataframe(df_filtered, use_container_width=True)
+        
+        col_exp1, col_exp2 = st.columns(2)
+        
+        with col_exp1:
+            excel_data = to_excel(df_filtered)
+            st.download_button(
+                label="📥 Télécharger Données Nettoyées (Excel)",
+                data=excel_data,
+                file_name="cartographie_risques_nettoyee.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        with col_exp2:
+            word_data = generate_word_report(df_filtered, stats_processus)
+            st.download_button(
+                label="📄 Télécharger Rapport Synthétique (Word)",
+                data=word_data,
+                file_name="Rapport_Cartographie_Risques.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
 
-    df['CN_Num'] = (df['CB_Num'] * (1 - df['DMR_Num'])).round(2)
-
-    if zone_col:
-        df['Zone_Display'] = df[zone_col].astype(str)
-    else:
-        # Attribution automatique de la zone si non présente
-        def get_zone(cn):
-            if cn >= 12: return "Zone D - Traitement"
-            elif cn >= 8: return "Zone C - Surveillance"
-            elif cn >= 4: return "Zone B - Vigilance"
-            else: return "Zone A - Optimisation"
-        df['Zone_Display'] = df['CN_Num'].apply(get_zone)
-
-    df['statut'] = "VALIDE"
-    return df
-
-st.session_state.df_carto = load_excel_data()
-
-# -------------------------------------------------------------
-# 3. SIDEBAR & FILTRES SÉCURISÉS (PROCESSUS & SOUS-PROCESSUS)
-# -------------------------------------------------------------
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2910/2910791.png", width=60)
-st.sidebar.title("ORMVA-TF Risk Center")
-st.sidebar.success(f"📊 Fichier chargé : **{len(st.session_state.df_carto)} risques**")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔍 Filtres Globaux")
-
-# 1. Filtre Processus
-raw_procs = st.session_state.df_carto["Proc_Display"].dropna().unique()
-all_procs = sorted([str(p) for p in raw_procs])
-selected_procs = st.sidebar.multiselect("Filtrer par Processus:", options=all_procs)
-
-# 2. Filtre Sous-Processus
-if selected_procs:
-    filtered_sproc_df = st.session_state.df_carto[st.session_state.df_carto["Proc_Display"].astype(str).isin(selected_procs)]
 else:
-    filtered_sproc_df = st.session_state.df_carto
-
-raw_sprocs = filtered_sproc_df["SProc_Display"].dropna().unique()
-all_sprocs = sorted([str(sp) for sp in raw_sprocs])
-selected_sprocs = st.sidebar.multiselect("Filtrer par Sous-Processus:", options=all_sprocs)
-
-df_filtered = st.session_state.df_carto.copy()
-if selected_procs:
-    df_filtered = df_filtered[df_filtered["Proc_Display"].astype(str).isin(selected_procs)]
-if selected_sprocs:
-    df_filtered = df_filtered[df_filtered["SProc_Display"].astype(str).isin(selected_sprocs)]
-
-st.sidebar.markdown("---")
-
-menu = st.sidebar.radio(
-    "Navigation System",
-    [
-        "🏠 Dashboard",
-        "⚠️ Cartographie des risques",
-        "📊 Analyses Statistiques"
-    ]
-)
-
-# -------------------------------------------------------------
-# 4. DASHBOARD
-# -------------------------------------------------------------
-if menu == "🏠 Dashboard":
-    st.markdown('<div class="main-header">🏠 Dashboard Décisionnel d\'Audit Interne</div>', unsafe_allow_html=True)
-    
-    total_risques = len(df_filtered)
-    nb_processus = df_filtered["Proc_Display"].nunique()
-    crit_critiques = len(df_filtered[df_filtered["Zone_Display"].astype(str).str.contains("Zone D|Traitement", case=False, na=False)])
-    cn_moyenne = df_filtered["CN_Num"].mean() if total_risques > 0 else 0
-    dmr_moyen = df_filtered["DMR_Num"].mean() if total_risques > 0 else 0
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Risques</div><div class="kpi-value">{total_risques}</div></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="kpi-card"><div class="kpi-title">Processus</div><div class="kpi-value">{nb_processus}</div></div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="kpi-card"><div class="kpi-title">Risques Critiques</div><div class="kpi-value" style="color:#D9534F;">{crit_critiques}</div></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="kpi-card"><div class="kpi-title">Criticité Nette Moy.</div><div class="kpi-value">{cn_moyenne:.2f}</div></div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    col_left, col_right = st.columns([2, 1.2])
-
-    with col_left:
-        st.subheader("📊 Matrice des Actions (4x4)")
-        
-        x_bins = [0, 4, 8, 12, 16]
-        x_labels = ["Faible [0-4[", "Moyen [4-8[", "Significatif [8-12[", "Elevé [12-16]"]
-        y_bins = [0, 0.25, 0.50, 0.75, 1.0]
-        y_labels = ["Satisfaisant ≤100%", "Correcte ≤75%", "Partiel ≤50%", "Faible ≤25%"]
-
-        df_matrix = df_filtered.copy()
-        df_matrix["Cat_CB"] = pd.cut(df_matrix["CB_Num"], bins=x_bins, labels=x_labels, include_lowest=True)
-        df_matrix["Cat_DMR"] = pd.cut(df_matrix["DMR_Num"], bins=y_bins, labels=y_labels, include_lowest=True)
-
-        matrix_text = np.empty((4, 4), dtype=object)
-        for i, y_lab in enumerate(reversed(y_labels)):
-            for j, x_lab in enumerate(x_labels):
-                sub_df = df_matrix[(df_matrix["Cat_DMR"] == y_lab) & (df_matrix["Cat_CB"] == x_lab)]
-                codes = sub_df["Code_Display"].astype(str).tolist()
-                matrix_text[i, j] = "<br>".join(codes) if codes else "-"
-
-        colorscale = [[0.0, "#99C2A2"], [0.33, "#F9E79F"], [0.66, "#F1948A"], [1.0, "#B03A2E"]]
-        z_values = [[2, 2, 3, 3], [1, 2, 2, 3], [0, 1, 1, 2], [0, 0, 1, 2]]
-
-        fig_matrix = go.Figure(data=go.Heatmap(
-            z=z_values,
-            x=x_labels,
-            y=list(reversed(y_labels)),
-            text=matrix_text,
-            texttemplate="%{text}",
-            textfont={"size": 9, "color": "black"},
-            colorscale=colorscale,
-            showscale=False
-        ))
-
-        fig_matrix.update_layout(
-            xaxis_title="CRITICITÉ BRUTE",
-            yaxis_title="DEGRÉ DE CONTRÔLE (DMR)",
-            height=430,
-            margin=dict(l=10, r=10, t=10, b=10)
-        )
-        st.plotly_chart(fig_matrix, use_container_width=True)
-
-    with col_right:
-        st.subheader("🍩 Distribution par Zone")
-        zone_counts = df_filtered["Zone_Display"].value_counts().reset_index()
-        zone_counts.columns = ["Zone", "Total"]
-        
-        fig_donut = px.pie(
-            zone_counts, 
-            values="Total", 
-            names="Zone", 
-            hole=0.45,
-            color_discrete_sequence=px.colors.qualitative.Set2
-        )
-        fig_donut.update_traces(textposition='inside', textinfo='percent+label')
-        fig_donut.update_layout(height=430, showlegend=False)
-        st.plotly_chart(fig_donut, use_container_width=True)
-
-# -------------------------------------------------------------
-# 5. CARTOGRAPHIE DES RISQUES (EXCEL EXACT)
-# -------------------------------------------------------------
-elif menu == "⚠️ Cartographie des risques":
-    st.markdown('<div class="main-header">⚠️ Cartographie Officielle des Risques (Données Réelles)</div>', unsafe_allow_html=True)
-    st.success(f"Affichage direct des **{len(df_filtered)}** lignes issues de `projet1.xlsx`")
-    
-    # Affichage du tableau complet avec l'ensemble des colonnes d'origine
-    st.dataframe(df_filtered, use_container_width=True, height=550)
-    
-    csv = df_filtered.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Exporter cette vue en CSV", data=csv, file_name="cartographie_reelle_ormva.csv", mime="text/csv")
-
-elif menu == "📊 Analyses Statistiques":
-    st.markdown('<div class="main-header">📊 Analyses Statistiques</div>', unsafe_allow_html=True)
-    st.write("Distribution et statistiques descriptives de `projet1.xlsx`:")
-    st.write(df_filtered[["CB_Num", "DMR_Num", "CN_Num"]].describe())
+    st.info("👈 Veuillez charger le fichier Excel (`projet1.xlsx`) depuis le panneau latéral pour afficher l'application.")
