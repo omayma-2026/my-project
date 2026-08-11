@@ -18,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Style CSS personnalisé pour un rendu professionnel
+# Style CSS personnalisé
 st.markdown("""
     <style>
     .main-header {
@@ -36,7 +36,7 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
     </style>
-""", unsafe_allow_allowed_html=True)
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # 2. FONCTIONS DE TRAITEMENT ET NETTOYAGE
@@ -52,7 +52,8 @@ def process_data(file):
     df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
     
     # Supprimer les lignes vides ou sans code risque
-    df = df.dropna(subset=['code']).reset_index(drop=True)
+    if 'code' in df.columns:
+        df = df.dropna(subset=['code']).reset_index(drop=True)
     
     # Nettoyage des chaînes de caractères
     str_cols = ['code', 'processus', 'sous_processus', 'intitule']
@@ -63,7 +64,7 @@ def process_data(file):
     if 'sous_processus' in df.columns:
         df['sous_processus'] = df['sous_processus'].replace('nan', 'Non spécifié')
     
-    # Conversion numérique et calculs rigoureux
+    # Conversion numérique et calculs
     for col in ['prob', 'grav', 'dmr']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -84,9 +85,9 @@ def process_data(file):
             
     df['niveau_risque'] = df['criticite_nette'].apply(categoriser_criticite)
     
-    # Réorganisation
-    cols_order = ['code', 'processus', 'sous_processus', 'intitule', 'prob', 'grav', 
-                  'criticite_brute', 'dmr', 'criticite_nette', 'niveau_risque']
+    # Réorganisation des colonnes présentables
+    cols_order = [c for c in ['code', 'processus', 'sous_processus', 'intitule', 'prob', 'grav', 
+                  'criticite_brute', 'dmr', 'criticite_nette', 'niveau_risque'] if c in df.columns]
     
     return df[cols_order]
 
@@ -102,19 +103,16 @@ def to_excel(dataframe):
 def generate_word_report(df, stats_proc):
     doc = Document()
     
-    # Titre
     title = doc.add_heading('Rapport d\'Analyse de la Cartographie des Risques', level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     doc.add_paragraph(f"Nombre total de risques analysés : {len(df)}")
     
-    # Résumé
     doc.add_heading('1. Synthèse Globale', level=1)
     p = doc.add_paragraph()
     p.add_run(f"- Criticité Nette Moyenne : {df['criticite_nette'].mean():.2f}\n")
     p.add_run(f"- Risques critiques/élevés : {len(df[df['niveau_risque'].isin(['Élevée', 'Critique'])])}\n")
     
-    # Tableau par processus
     doc.add_heading('2. Statistiques par Processus', level=1)
     table = doc.add_table(rows=1, cols=4)
     hdr_cells = table.rows[0].cells
@@ -141,10 +139,9 @@ st.markdown('<div class="main-header">🛡️ Cartographie & Quantitative Risk A
 
 # Sidebar - Chargement du fichier
 st.sidebar.header("📁 Données d'entrée")
-uploaded_file = st.sidebar.file_upload("Charger le fichier Excel (.xlsx)", type=["xlsx"])
+uploaded_file = st.sidebar.file_uploader("Charger le fichier Excel (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
-    # Traitement automatique
     df = process_data(uploaded_file)
     
     # Sidebar - Filtres
@@ -164,9 +161,7 @@ if uploaded_file is not None:
     # Application des filtres
     df_filtered = df[(df['processus'].isin(selected_proc)) & (df['niveau_risque'].isin(selected_niveau))]
     
-    # ---------------------------------------------------------
     # TABS DASHBOARD
-    # ---------------------------------------------------------
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 Dashboard & KPIs", 
         "🔥 Matrice des Risques", 
@@ -174,9 +169,7 @@ if uploaded_file is not None:
         "📋 Données & Exports"
     ])
     
-    # ---------------------------------------------------------
     # TAB 1: DASHBOARD
-    # ---------------------------------------------------------
     with tab1:
         st.subheader("Indicateurs Clés de Performance (KPIs)")
         col1, col2, col3, col4 = st.columns(4)
@@ -195,7 +188,6 @@ if uploaded_file is not None:
         col_left, col_right = st.columns(2)
         
         with col_left:
-            # Répartition des niveaux de risques
             fig_pie = px.pie(
                 df_filtered, 
                 names='niveau_risque', 
@@ -206,7 +198,6 @@ if uploaded_file is not None:
             st.plotly_chart(fig_pie, use_container_width=True)
             
         with col_right:
-            # Distribution de la criticité nette
             fig_hist = px.histogram(
                 df_filtered, 
                 x='criticite_nette', 
@@ -217,16 +208,12 @@ if uploaded_file is not None:
             fig_hist.update_layout(xaxis_title="Criticité Nette", yaxis_title="Nombre de Risques")
             st.plotly_chart(fig_hist, use_container_width=True)
 
-    # ---------------------------------------------------------
     # TAB 2: MATRICE DES RISQUES (HEATMAP)
-    # ---------------------------------------------------------
     with tab2:
         st.subheader("Matrice Probabilité x Gravité (Heatmap)")
         
-        # Calcul de la matrice
         matrix_data = df_filtered.groupby(['grav', 'prob']).size().unstack(fill_value=0)
         
-        # S'assurer que la grille 4x4 existe
         for i in range(1, 5):
             if i not in matrix_data.index:
                 matrix_data.loc[i] = 0
@@ -245,9 +232,7 @@ if uploaded_file is not None:
         fig_heatmap.update_layout(height=500)
         st.plotly_chart(fig_heatmap, use_container_width=True)
 
-    # ---------------------------------------------------------
     # TAB 3: STATISTIQUES PAR PROCESSUS
-    # ---------------------------------------------------------
     with tab3:
         st.subheader("Analyse Comparative des Processus")
         
@@ -260,7 +245,6 @@ if uploaded_file is not None:
             Criticite_Nette_Somme=("criticite_nette", "sum")
         ).round(2).sort_values("Criticite_Nette_Somme", ascending=False)
         
-        # Graphique des processus les plus critiques
         fig_bar = px.bar(
             stats_processus.reset_index(),
             x='Criticite_Nette_Somme',
@@ -275,9 +259,7 @@ if uploaded_file is not None:
         
         st.dataframe(stats_processus, use_container_width=True)
 
-    # ---------------------------------------------------------
     # TAB 4: DONNEES ET EXPORTATIONS
-    # ---------------------------------------------------------
     with tab4:
         st.subheader("Consulter & Exporter les Données")
         st.dataframe(df_filtered, use_container_width=True)
@@ -303,4 +285,4 @@ if uploaded_file is not None:
             )
 
 else:
-    st.info("👈 Veuillez charger le fichier Excel (`projet1.xlsx`) depuis le panneau latéral pour afficher l'application.")
+    st.info("👈 Veuillez charger le fichier Excel depuis le panneau latéral pour afficher l'application.")
