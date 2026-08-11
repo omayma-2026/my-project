@@ -2,14 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from scipy import stats
-from io import BytesIO
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLE INSTITUTIONNEL
+# 1. PAGE CONFIGURATION & CUSTOM SAAS CSS
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="ORMVA-TF | Risk & Audit Center",
@@ -18,234 +13,290 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Application de la charte graphique : Vert forêt, Vert sauge, Blanc, Alertes
+# Custom CSS pour reproduire le design exact de l'image (Navbar, Cards, Footer, Breadcrumbs)
 st.markdown("""
     <style>
-    .main-header {
-        font-size: 2rem;
-        color: #0A2F1D;
-        font-weight: 800;
-        text-align: center;
-        margin-bottom: 0.5rem;
+    /* Reset & Base fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        background-color: #FAFAFA;
     }
-    .sub-header {
-        font-size: 1rem;
-        color: #1E513B;
-        text-align: center;
-        margin-bottom: 2rem;
-        font-weight: 500;
+
+    /* TOP NAVBAR INSTITUTIONNELLE */
+    .top-navbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background-color: #FFFFFF;
+        padding: 12px 32px;
+        border-bottom: 1px solid #E5E7EB;
+        margin-top: -60px;
+        margin-bottom: 20px;
     }
-    .stApp {
-        background-color: #F4F7F5;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #0A2F1D;
+    .brand-logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
         font-weight: 700;
+        font-size: 1.25rem;
+        color: #0A2F1D;
     }
-    .badge-critical {
-        background-color: #DC2626;
+    .brand-logo-icon {
+        background-color: #1E513B;
         color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         font-weight: bold;
+    }
+    .cta-button {
+        background-color: #1E513B;
+        color: white !important;
+        padding: 8px 18px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 0.875rem;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    /* BREADCRUMB navigation */
+    .breadcrumb {
+        font-size: 0.85rem;
+        color: #6B7280;
+        margin-bottom: 24px;
+    }
+    .breadcrumb a {
+        color: #6B7280;
+        text-decoration: none;
+    }
+
+    /* CARDS STYLÉES COMME SUR L'IMAGE */
+    .custom-card {
+        background: #FFFFFF;
+        border: 1px solid #E5E7EB;
+        border-radius: 12px;
+        padding: 24px;
+        transition: transform 0.2s, box-shadow 0.2s;
+        height: 100%;
+    }
+    .custom-card:hover {
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+        border-color: #1E513B;
+    }
+    .card-category {
+        font-size: 0.75rem;
+        font-weight: 700;
+        color: #1E513B;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
+    }
+    .card-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #111827;
+        margin-bottom: 12px;
+        line-height: 1.4;
+    }
+    .card-desc {
+        font-size: 0.875rem;
+        color: #4B5563;
+        line-height: 1.5;
+    }
+
+    /* FOOTER PROFESSIONNEL SOMBRE */
+    .footer-dark {
+        background-color: #0B1320;
+        color: #9CA3AF;
+        padding: 48px 32px 32px 32px;
+        border-radius: 16px 16px 0 0;
+        margin-top: 60px;
+    }
+    .footer-title {
+        color: #FFFFFF;
+        font-weight: 700;
+        font-size: 1.1rem;
+        margin-bottom: 12px;
+    }
+    .footer-section-title {
+        color: #FFFFFF;
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 16px;
+    }
+    .footer-links {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        font-size: 0.875rem;
+    }
+    .footer-links li {
+        margin-bottom: 10px;
+    }
+    .footer-links a {
+        color: #9CA3AF;
+        text-decoration: none;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. CHARGEMENT ET MOTEUR ANALYTIQUE (DONNÉES ORMVA-TF)
+# 2. TOP NAVBAR (HEADER)
 # ---------------------------------------------------------
-@st.cache_data
-def load_official_data():
-    """Charge les données de référence du projet ORMVA-TF (12 Processus)."""
-    processus_data = [
-        {'rang': 1, 'code': 'P9', 'libelle': 'Achat et approvisionnement', 'score': 88.7, 'var95': 1240.5, 'critCount': 8, 'dmrMoy': 0.42, 'priorite': 'Très Élevée'},
-        {'rang': 2, 'code': 'P2', 'libelle': 'Gestion de production agricole', 'score': 82.8, 'var95': 1080.2, 'critCount': 7, 'dmrMoy': 0.45, 'priorite': 'Très Élevée'},
-        {'rang': 3, 'code': 'P7', 'libelle': 'Gestion budgétaire, financière et comptable', 'score': 71.8, 'var95': 890.1, 'critCount': 5, 'dmrMoy': 0.50, 'priorite': 'Élevée'},
-        {'rang': 4, 'code': 'P1', 'libelle': 'Aides et incitations financières de l’État', 'score': 61.1, 'var95': 620.4, 'critCount': 4, 'dmrMoy': 0.55, 'priorite': 'Élevée'},
-        {'rang': 5, 'code': 'P4', 'libelle': 'Gestion des réseaux d’irrigation', 'score': 48.9, 'var95': 410.0, 'critCount': 3, 'dmrMoy': 0.60, 'priorite': 'Moyenne'},
-        {'rang': 6, 'code': 'P10', 'libelle': 'Ressources humaines', 'score': 46.4, 'var95': 380.6, 'critCount': 2, 'dmrMoy': 0.62, 'priorite': 'Moyenne'},
-        {'rang': 7, 'code': 'P8', 'libelle': 'Informatique', 'score': 39.1, 'var95': 290.0, 'critCount': 2, 'dmrMoy': 0.68, 'priorite': 'Moyenne'},
-        {'rang': 8, 'code': 'P5', 'libelle': 'Logistique', 'score': 31.0, 'var95': 195.3, 'critCount': 1, 'dmrMoy': 0.70, 'priorite': 'Faible'},
-        {'rang': 9, 'code': 'P3', 'libelle': 'Aménagement', 'score': 30.4, 'var95': 180.2, 'critCount': 1, 'dmrMoy': 0.72, 'priorite': 'Faible'},
-        {'rang': 10, 'code': 'P6', 'libelle': 'Juridique', 'score': 28.3, 'var95': 150.0, 'critCount': 1, 'dmrMoy': 0.75, 'priorite': 'Faible'},
-        {'rang': 11, 'code': 'P12', 'libelle': 'Direction et pilotage', 'score': 16.3, 'var95': 80.4, 'critCount': 0, 'dmrMoy': 0.80, 'priorite': 'Faible'},
-        {'rang': 12, 'code': 'P11', 'libelle': 'Audit interne', 'score': 0.0, 'var95': 0.0, 'critCount': 0, 'dmrMoy': 0.90, 'priorite': 'Nulle'}
-    ]
-    return pd.DataFrame(processus_data)
+st.markdown("""
+    <div class="top-navbar">
+        <div class="brand-logo">
+            <div class="brand-logo-icon">O</div>
+            <span>ORMVA-TF Risk Center</span>
+        </div>
+        <div style="display: flex; gap: 24px; align-items: center; font-size: 0.9rem; font-weight: 500;">
+            <span style="color: #1E513B; font-weight: 700;">Dashboard</span>
+            <span>Cartographie</span>
+            <span>Priorisation</span>
+            <span>Missions</span>
+        </div>
+        <a href="#" class="cta-button">Nouvelle Mission →</a>
+    </div>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 3. INTERFACE PRINCIPALE STREAMLIT
+# 3. BREADCRUMBS & SECTION TITLE
 # ---------------------------------------------------------
-st.markdown('<div class="main-header">ORMVA-TF Risk & Audit Center</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Système Décisionnel d\'Aide à la Priorisation des Missions d\'Audit Interne</div>', unsafe_allow_html=True)
-
-df_proc = load_official_data()
-
-# MENU SIDEBAR
-st.sidebar.image("https://img.icons8.com/color/96/shield.png", width=60)
-st.sidebar.title("Navigation")
-menu = st.sidebar.radio(
-    "Modules de la plateforme :",
-    [
-        "🏠 Dashboard Décisionnel",
-        "⚠️ Cartographie des Risques",
-        "🔔 Workflow de Validation",
-        "🎯 Priorisation PFA (0-100)",
-        "📊 Analyses Quantitatives & Actuariat",
-        "📋 Missions d'Audit Interne",
-        "📜 Audit Trail & Logs"
-    ]
-)
+st.markdown("""
+    <div class="breadcrumb">
+        Accueil &nbsp;›&nbsp; Cartographie des Risques &nbsp;›&nbsp; <b>Priorisation des Processus d'Audit (2026)</b>
+    </div>
+    <h2 style="font-weight: 800; color: #0A2F1D; margin-bottom: 24px;">Processus Prioritaires pour l'Audit Interne</h2>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# MODULE 1: DASHBOARD DÉCISIONNEL
+# 4. CARDS GRID (STYLE DE L'IMAGE)
 # ---------------------------------------------------------
-if menu == "🏠 Dashboard Décisionnel":
-    st.subheader("Indicateurs Clés du Dispositif (ORMVA-TF)")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Risques Cartographiés", "159", "12 Processus")
-    c2.metric("VaR Globale (95%)", "4 816.7", "Monte Carlo")
-    c3.metric("DMR Surestimés", "21 Risques", "Incohérences", delta_color="inverse")
-    c4.metric("Processus Top 1", "P9 (88.7)", "Achat & Approv.")
+col1, col2 = st.columns(2)
 
-    st.divider()
+with col1:
+    st.markdown("""
+        <div class="custom-card">
+            <div class="card-category">RANG #1 — SCORE PFA : 88.7 / 100</div>
+            <div class="card-title">P9 — Achat et Approvisionnement (ORMVA-TF)</div>
+            <div class="card-desc">
+                Processus identifié comme prioritaire numéro 1. Il présente une <b>VaR 95% de 1240.5 DH</b> et concentre <b>8 risques critiques</b> liés à la gestion des marchés et aux ruptures de stock.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.write("### Score de Priorisation par Processus (0–100)")
-        fig_score = px.bar(
-            df_proc, 
-            x='score', 
-            y='code', 
-            orientation='h',
-            color='score',
-            color_continuous_scale='Greens',
-            text='score'
-        )
-        fig_score.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
-        st.plotly_chart(fig_score, use_container_width=True)
+with col2:
+    st.markdown("""
+        <div class="custom-card">
+            <div class="card-category">RANG #2 — SCORE PFA : 82.8 / 100</div>
+            <div class="card-title">P2 — Gestion de Production Agricole</div>
+            <div class="card-desc">
+                Deuxième axe d'intervention majeur. Exposition financière élevée avec une <b>VaR 95% de 1080.2 DH</b> et 7 risques nécessitant un audit approfondi sur les itinéraires techniques.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
-    with col_right:
-        st.write("### Répartition de la VaR 95% par Processus")
-        fig_var = px.pie(
-            df_proc, 
-            values='var95', 
-            names='code',
-            title="Exposition Stochastique au Risque",
-            color_discrete_sequence=px.colors.sequential.Greens_r
-        )
-        st.plotly_chart(fig_var, use_container_width=True)
+st.write("") # Spacer
 
-# ---------------------------------------------------------
-# MODULE 2: CARTOGRAPHIE DES RISQUES
-# ---------------------------------------------------------
-elif menu == "⚠️ Cartographie des Risques":
-    st.subheader("Registre de la Cartographie des Risques (159 Risques)")
-    
-    # Exemples de risques de la cartographie
-    sample_risks = pd.DataFrame([
-        {'Code': 'R-P9-01', 'Processus': 'P9', 'Intitulé': 'Rupture d approvisionnement en pièces stratégiques', 'Prob': 3, 'Grav': 4, 'CB': 12, 'DMR': 0.40, 'CN': 4.8, 'Statut': 'Validé'},
-        {'Code': 'R-P2-04', 'Processus': 'P2', 'Intitulé': 'Non-respect du calendrier d itinéraire technique', 'Prob': 4, 'Grav': 4, 'CB': 16, 'DMR': 0.35, 'CN': 5.6, 'Statut': 'Validé'},
-        {'Code': 'R-P7-02', 'Processus': 'P7', 'Intitulé': 'Erreur d imputations comptables sur fonds de subvention', 'Prob': 2, 'Grav': 4, 'CB': 8, 'DMR': 0.85, 'CN': 6.8, 'Statut': 'En vérification'},
-        {'Code': 'R-P1-05', 'Processus': 'P1', 'Intitulé': 'Retard de traitement des dossiers de subvention FDA', 'Prob': 3, 'Grav': 3, 'CB': 9, 'DMR': 0.50, 'CN': 4.5, 'Statut': 'Validé'}
-    ])
-    
-    filter_proc = st.multiselect("Filtrer par Processus :", df_proc['code'].unique(), default=df_proc['code'].unique())
-    filtered_df = sample_risks[sample_risks['Processus'].isin(filter_proc)]
-    
-    st.dataframe(filtered_df, use_container_width=True)
+col3, col4 = st.columns(2)
+
+with col3:
+    st.markdown("""
+        <div class="custom-card">
+            <div class="card-category">RANG #3 — SCORE PFA : 71.8 / 100</div>
+            <div class="card-title">P7 — Gestion Budgétaire, Financière et Comptable</div>
+            <div class="card-desc">
+                Score élevé justifié par 5 risques critiques et une anomalie détectée sur le Dispositif de Maîtrise des Risques (DMR surestimé sur la comptabilité des subventions).
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with col4:
+    st.markdown("""
+        <div class="custom-card">
+            <div class="card-category">RANG #4 — SCORE PFA : 61.1 / 100</div>
+            <div class="card-title">P1 — Aides et Incitations Financières de l’État</div>
+            <div class="card-desc">
+                Sous surveillance élevée. Risques principalement axés sur les délais de traitement des dossiers du Fonds de Développement Agricole (FDA).
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# MODULE 3: WORKFLOW DE VALIDATION
+# 5. SECTION ANALYTIQUE COMPLÉMENTAIRE
 # ---------------------------------------------------------
-elif menu == "🔔 Workflow de Validation":
-    st.subheader("Workflow de Validation par l'Auditeur Interne")
-    
-    st.info("Nouveau risque soumis par le Responsable du Processus P7 (Gestion budgétaire et comptable)")
-    
-    with st.expander("🔎 Examiner le risque R-P7-02 (En attente)", expanded=True):
-        st.write("**Intitulé :** Erreur d imputations comptables sur fonds de subvention")
-        st.write("**Criticité Brute :** 8 | **DMR Déclaré :** 0.85 (Alerte : DMR élevé)")
-        
-        col_v1, col_v2 = st.columns(2)
-        if col_v1.button("✅ Valider & Intégrer à la Cartographie"):
-            st.success("Le risque R-P7-02 a été validé et intégré. Les scores de priorisation ont été recalculés.")
-        if col_v2.button("❌ Rejeter / Demander Modification"):
-            st.error("Demande de modification transmise au déclarant.")
+st.write("")
+st.write("")
+st.subheader("📊 Synthèse de la Priorisation et Répartition Stochastique")
+
+df_data = pd.DataFrame([
+    {'Processus': 'P9 - Achat', 'Score': 88.7},
+    {'Processus': 'P2 - Production', 'Score': 82.8},
+    {'Processus': 'P7 - Finance', 'Score': 71.8},
+    {'Processus': 'P1 - Aides FDA', 'Score': 61.1},
+    {'Processus': 'P4 - Irrigation', 'Score': 48.9},
+])
+
+fig = px.bar(df_data, x='Score', y='Processus', orientation='h', color='Score',
+             color_continuous_scale=['#4E7D5B', '#1E513B', '#0A2F1D'])
+fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), plot_bgcolor='#FAFAFA')
+st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 4: PRIORISATION PFA (0-100)
+# 6. FOOTER SOMBRE (STYLE DE L'IMAGE)
 # ---------------------------------------------------------
-elif menu == "🎯 Priorisation PFA (0-100)":
-    st.subheader("Classement Final des Processus pour la Planification de l'Audit Interne")
-    st.caption("Échelle harmonisée 0–100. Corrélation de Spearman avec le modèle initial : ρ = 0.98")
-    
-    st.dataframe(
-        df_proc[['rang', 'code', 'libelle', 'score', 'var95', 'critCount', 'dmrMoy', 'priorite']],
-        use_container_width=True
-    )
-    
-    selected_p = st.selectbox("Sélectionner un processus pour justification du score :", df_proc['code'])
-    p_info = df_proc[df_proc['code'] == selected_p].iloc[0]
-    
-    st.write(f"### Pourquoi le processus **{p_info['code']} - {p_info['libelle']}** a un score de **{p_info['score']}/100** ?")
-    col_e1, col_e2, col_e3 = st.columns(3)
-    col_e1.metric("Exposition VaR 95%", f"{p_info['var95']}")
-    col_e2.metric("Risques Critiques", f"{p_info['critCount']}")
-    col_e3.metric("Niveau de Maîtrise (DMR)", f"{p_info['dmrMoy']}")
-
-# ---------------------------------------------------------
-# MODULE 5: ANALYSES QUANTITATIVES & ACTUARIAT
-# ---------------------------------------------------------
-elif menu == "📊 Analyses Quantitatives & Actuariat":
-    st.subheader("Résultats des Modèles Avancés (Développés sous Python)")
-    
-    t1, t2, t3 = st.tabs(["ANOVA", "Analyse du DMR", "Monte Carlo & VaR"])
-    
-    with t1:
-        st.write("### Test Statistique ANOVA")
-        col_a1, col_a2 = st.columns(2)
-        col_a1.metric("F-Statistic", "4.22")
-        col_a2.metric("p-value", "0.00002")
-        st.success("Interprétation : La p-value < 0.05 confirme que les différences de criticité nette entre les 12 processus sont statistiquement significatives.")
-        
-    with t2:
-        st.write("### Détection des Incohérences de DMR")
-        st.metric("Coefficient de Détermination (R²)", "0.915")
-        st.warning("L'analyse met en évidence 21 risques présentant un DMR potentiellement surestimé par rapport à la sévérité réelle. Une révision ciblée est fortement préconisée.")
-        
-    with t3:
-        st.write("### Simulation Monte Carlo de la Pertes Globale")
-        st.metric("VaR Globale 95%", "4 816.7 DH")
-        st.info("Simulation basée sur 10 000 itérations stochastiques (Fréquence Poisson x Sévérité Lognormale).")
-
-# ---------------------------------------------------------
-# MODULE 6: MISSIONS D'AUDIT INTERNE
-# ---------------------------------------------------------
-elif menu == "📋 Missions d'Audit Interne":
-    st.subheader("Planification et Engagement des Missions")
-    
-    st.write("### Planifier une mission basée sur le score PFA")
-    with st.form("mission_form"):
-        proc_audit = st.selectbox("Processus cible :", df_proc['code'] + " - " + df_proc['libelle'])
-        auditeur = st.text_input("Auditeur responsable :", "Auditeur Interne 01")
-        date_debut = st.date_input("Date de début prévue :")
-        objectifs = st.text_area("Objectifs de la mission :", "Vérifier le contrôle interne de la chaîne d approvisionnement...")
-        
-        if st.form_submit_button("📅 Instancier la Mission d'Audit"):
-            st.success(f"Mission d'audit créée avec succès pour {proc_audit}!")
-
-# ---------------------------------------------------------
-# MODULE 7: AUDIT TRAIL & LOGS
-# ---------------------------------------------------------
-elif menu == "📜 Audit Trail & Logs":
-    st.subheader("Traçabilité Immuable des Opérations")
-    
-    logs = [
-        {"Date": "11/08/2026 10:14", "Utilisateur": "Auditeur01", "Action": "Validation du risque R-P9-01", "Détail": "Statut changé vers Validé"},
-        {"Date": "10/08/2026 15:30", "Utilisateur": "RespP7", "Action": "Déclaration du risque R-P7-02", "Détail": "Nouveau risque soumis"},
-        {"Date": "09/08/2026 09:00", "Utilisateur": "Admin", "Action": "Exécution Simulation Monte Carlo", "Détail": "VaR 95% = 4816.7"}
-    ]
-    st.table(pd.DataFrame(logs))
+st.markdown("""
+    <div class="footer-dark">
+        <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 32px;">
+            <div>
+                <div class="footer-title">🛡️ ORMVA-TF Risk & Audit</div>
+                <p style="font-size: 0.85rem; line-height: 1.6;">
+                    Système d'Information d'Aide à la Décision pour le pilotage des risques et la priorisation des missions d'audit interne du Office Régional de Mise en Valeur Agricole du Tafilalet.
+                </p>
+                <p style="font-size: 0.8rem; margin-top: 16px; color: #6B7280;">
+                    📍 Errachidia, Maroc | 📞 +212 5 35 57 20 22
+                </p>
+            </div>
+            <div>
+                <div class="footer-section-title">MODULES</div>
+                <ul class="footer-links">
+                    <li><a href="#">Cartographie</a></li>
+                    <li><a href="#">Workflow Validation</a></li>
+                    <li><a href="#">Scoring & Priorisation</a></li>
+                    <li><a href="#">Simulations Monte Carlo</a></li>
+                </ul>
+            </div>
+            <div>
+                <div class="footer-section-title">ANALYTIQUE</div>
+                <ul class="footer-links">
+                    <li><a href="#">Analyse ANOVA</a></li>
+                    <li><a href="#">Contrôle du DMR</a></li>
+                    <li><a href="#">Calcul VaR / TVaR</a></li>
+                    <li><a href="#">Clustering Risques</a></li>
+                </ul>
+            </div>
+            <div>
+                <div class="footer-section-title">GOVERNANCE</div>
+                <ul class="footer-links">
+                    <li><a href="#">Audit Trail & Logs</a></li>
+                    <li><a href="#">Gestion des Accès</a></li>
+                    <li><a href="#">Versions du Modèle</a></li>
+                    <li><a href="#">Rapports PDF / Excel</a></li>
+                </ul>
+            </div>
+        </div>
+        <div style="border-top: 1px solid #1F2937; margin-top: 32px; padding-top: 16px; text-align: center; font-size: 0.75rem; color: #6B7280;">
+            © 2026 ORMVA-TF — Projet de Fin d'Études en Génie Financier et Actuariat. Tous droits réservés.
+        </div>
+    </div>
+""", unsafe_allow_html=True)
