@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-from scipy import stats
 from datetime import datetime
 
 # -------------------------------------------------------------
@@ -73,7 +72,6 @@ def load_and_prep_data():
         df.columns = df.columns.str.strip()
         df = df.dropna(how='all')
     except Exception:
-        # Jeu de secours avec exactement 159 risques
         np.random.seed(42)
         processus_list = [
             "P1 - Aides et incitations financières", "P2 - Gestion de production agricole",
@@ -82,7 +80,6 @@ def load_and_prep_data():
             "P9 - Achat et approvisionnement", "P10 - Ressources humaines",
             "P11 - Audit interne", "P12 - Direction et pilotage"
         ]
-        # Total = 159 risques
         counts = [12, 20, 10, 15, 10, 8, 21, 12, 25, 12, 6, 8]
         records = []
         id_counter = 1
@@ -120,10 +117,10 @@ def load_and_prep_data():
                 id_counter += 1
         df = pd.DataFrame(records)
 
-    # Standardisation garantie des colonnes principales
+    # Standardisation garantie des colonnes
     col_map = {}
     for col in df.columns:
-        c_low = col.lower()
+        c_low = str(col).lower()
         if 'code' in c_low or 'risque' in c_low or 'id' in c_low:
             col_map['code_col'] = col
         elif 'sous' in c_low:
@@ -174,9 +171,7 @@ def load_and_prep_data():
 
     return df
 
-# Rechargement propre dans la session
-if "df_carto" not in st.session_state or "proc_col" not in st.session_state.df_carto.columns:
-    st.session_state.df_carto = load_and_prep_data()
+st.session_state.df_carto = load_and_prep_data()
 
 if "audit_trail" not in st.session_state:
     st.session_state.audit_trail = [
@@ -188,7 +183,7 @@ if "user_role" not in st.session_state:
     st.session_state.user_role = "Auditeur Interne"
 
 # -------------------------------------------------------------
-# 3. SIDEBAR & FILTRES INTERACTIFS (PROCESSUS & SOUS-PROCESSUS)
+# 3. SIDEBAR & FILTRES SÉCURISÉS (PROCESSUS & SOUS-PROCESSUS)
 # -------------------------------------------------------------
 st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2910/2910791.png", width=60)
 st.sidebar.title("ORMVA-TF Risk Center")
@@ -207,25 +202,26 @@ st.session_state.user_role = role_selected
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔍 Filtres Globaux")
 
-# Filtre 1: Processus
-all_procs = sorted(st.session_state.df_carto["proc_col"].unique().tolist())
+# 1. Filtre Processus
+raw_procs = st.session_state.df_carto["proc_col"].dropna().unique()
+all_procs = sorted([str(p) for p in raw_procs])
 selected_procs = st.sidebar.multiselect("Filtrer par Processus:", options=all_procs)
 
-# Filtre 2: Sous-Processus (dynamique selon les processus choisis)
+# 2. Filtre Sous-Processus
 if selected_procs:
-    filtered_sproc_df = st.session_state.df_carto[st.session_state.df_carto["proc_col"].isin(selected_procs)]
+    filtered_sproc_df = st.session_state.df_carto[st.session_state.df_carto["proc_col"].astype(str).isin(selected_procs)]
 else:
     filtered_sproc_df = st.session_state.df_carto
 
-all_sprocs = sorted(filtered_sproc_df["sproc_col"].unique().tolist())
+raw_sprocs = filtered_sproc_df["sproc_col"].dropna().unique()
+all_sprocs = sorted([str(sp) for sp in raw_sprocs])
 selected_sprocs = st.sidebar.multiselect("Filtrer par Sous-Processus:", options=all_sprocs)
 
-# Application des filtres sur le dataframe global consultable
 df_filtered = st.session_state.df_carto.copy()
 if selected_procs:
-    df_filtered = df_filtered[df_filtered["proc_col"].isin(selected_procs)]
+    df_filtered = df_filtered[df_filtered["proc_col"].astype(str).isin(selected_procs)]
 if selected_sprocs:
-    df_filtered = df_filtered[df_filtered["sproc_col"].isin(selected_sprocs)]
+    df_filtered = df_filtered[df_filtered["sproc_col"].astype(str).isin(selected_sprocs)]
 
 st.sidebar.markdown("---")
 
@@ -296,19 +292,8 @@ if menu == "🏠 Dashboard":
                 codes = sub_df["code_col"].astype(str).tolist()
                 matrix_text[i, j] = "<br>".join(codes) if codes else "-"
 
-        colorscale = [
-            [0.0, "#99C2A2"],
-            [0.33, "#F9E79F"],
-            [0.66, "#F1948A"],
-            [1.0, "#B03A2E"]
-        ]
-        
-        z_values = [
-            [2, 2, 3, 3],
-            [1, 2, 2, 3],
-            [0, 1, 1, 2],
-            [0, 0, 1, 2]
-        ]
+        colorscale = [[0.0, "#99C2A2"], [0.33, "#F9E79F"], [0.66, "#F1948A"], [1.0, "#B03A2E"]]
+        z_values = [[2, 2, 3, 3], [1, 2, 2, 3], [0, 1, 1, 2], [0, 0, 1, 2]]
 
         fig_matrix = go.Figure(data=go.Heatmap(
             z=z_values,
@@ -356,77 +341,53 @@ if menu == "🏠 Dashboard":
         st.plotly_chart(fig_donut, use_container_width=True)
 
 # -------------------------------------------------------------
-# 5. MODULE 2: CARTOGRAPHIE DES RISQUES & DÉCLARATION
+# 5. AUTRES MODULES
 # -------------------------------------------------------------
 elif menu == "⚠️ Cartographie des risques":
     st.markdown('<div class="main-header">⚠️ Cartographie Officielle des Risques - ORMVA-TF</div>', unsafe_allow_html=True)
-    
     tab1, tab2 = st.tabs(["📋 Registre des Risques", "➕ Déclarer un Nouveau Risque"])
     
     with tab1:
-        st.caption(f"Affichage de {len(df_filtered)} risques selon les filtres sélectionnés.")
         st.dataframe(
             df_filtered[["code_col", "proc_col", "sproc_col", "Criticite_Num", "DMR_Num", "criticite_nette", "zone_col", "statut"]],
             use_container_width=True,
             height=400
         )
-        
         csv = df_filtered.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Exporter la Sélection (CSV)", data=csv, file_name="cartographie_ormva_tf.csv", mime="text/csv")
         
     with tab2:
-        st.subheader("📝 Formulaire de Déclaration d'un Nouveau Risque")
         with st.form("form_declare"):
             col_a, col_b = st.columns(2)
             p_name = col_a.selectbox("Processus Concerné:", st.session_state.df_carto["proc_col"].unique())
             sp_name = col_b.text_input("Sous-Processus:", "Ex: Suivi des marchés")
-            
             r_desc = st.text_area("Description du Risque:", "")
-            r_cause = st.text_area("Causes Principales:", "")
-            
             c_cb = col_a.slider("Criticité Brute (1 à 16):", 1, 16, 8)
-            c_dmr = col_b.slider("Degré de Maîtrise des Risques - DMR (0.0 à 1.0):", 0.0, 1.0, 0.50)
-            
+            c_dmr = col_b.slider("DMR (0.0 à 1.0):", 0.0, 1.0, 0.50)
             submit = st.form_submit_button("🚀 Soumettre pour Validation")
-            
             if submit:
                 cn_calc = round(c_cb * (1 - c_dmr), 2)
                 new_id = len(st.session_state.df_carto) + 1
                 new_row = {
-                    "code_col": f"R{new_id}",
-                    "proc_col": p_name,
-                    "sproc_col": sp_name,
-                    "description": r_desc,
-                    "cause": r_cause,
-                    "Criticite_Num": c_cb,
-                    "DMR_Num": c_dmr,
-                    "criticite_nette": cn_calc,
-                    "zone_col": "Zone B - Vigilance",
-                    "statut": "EN_ATTENTE",
-                    "declared_by": st.session_state.user_role,
+                    "code_col": f"R{new_id}", "proc_col": p_name, "sproc_col": sp_name,
+                    "description": r_desc, "Criticite_Num": c_cb, "DMR_Num": c_dmr,
+                    "criticite_nette": cn_calc, "zone_col": "Zone B - Vigilance",
+                    "statut": "EN_ATTENTE", "declared_by": st.session_state.user_role,
                     "created_at": datetime.now().strftime("%Y-%m-%d")
                 }
-                
                 st.session_state.df_carto = pd.concat([st.session_state.df_carto, pd.DataFrame([new_row])], ignore_index=True)
                 st.success("✅ Risque soumis pour validation !")
 
-# -------------------------------------------------------------
-# 6. AUTRES MODULES
-# -------------------------------------------------------------
 elif menu == "🔔 Workflow Validation":
-    st.markdown('<div class="main-header">🔔 Workflow de Validation par l\'Auditeur Interne</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🔔 Workflow de Validation</div>', unsafe_allow_html=True)
     pending_df = st.session_state.df_carto[st.session_state.df_carto["statut"] == "EN_ATTENTE"]
     st.subheader(f"📥 Risques en Attente ({len(pending_df)})")
-    if len(pending_df) == 0:
-        st.info("Aucun risque en attente pour le moment.")
-    else:
-        for idx, row in pending_df.iterrows():
-            with st.expander(f"📌 {row['code_col']} - {row['proc_col']}"):
-                st.write(f"**Sous-Processus:** {row['sproc_col']}")
-                st.write(f"**Criticité Nette:** {row['criticite_nette']}")
-                if st.button("✅ Valider", key=f"v_{idx}"):
-                    st.session_state.df_carto.loc[idx, "statut"] = "VALIDE"
-                    st.rerun()
+    for idx, row in pending_df.iterrows():
+        with st.expander(f"📌 {row['code_col']} - {row['proc_col']}"):
+            st.write(f"**Sous-Processus:** {row['sproc_col']}")
+            if st.button("✅ Valider", key=f"v_{idx}"):
+                st.session_state.df_carto.loc[idx, "statut"] = "VALIDE"
+                st.rerun()
 
 elif menu == "🎯 Priorisation & Scoring":
     st.markdown('<div class="main-header">🎯 Priorisation des Processus</div>', unsafe_allow_html=True)
