@@ -1,23 +1,3 @@
-"""
-MODULE : Suivi des Plans d'Action / Recommandations
------------------------------------------------------
-A intégrer dans app.py existant (ORMVA-TF | Enterprise Risk & Audit Center).
-
-Comment l'utiliser :
-1. Copier ce fichier dans le repo (ex: pages/plan_action.py OU coller la fonction
-   render_plan_action() directement dans app.py).
-2. Ajouter "Suivi des Plans d'Action" dans le menu radio de la sidebar existante.
-3. Appeler render_plan_action(df_risques) en lui passant le dataframe des risques
-   (le même que celui utilisé pour le Donut / Top 10).
-
-Le module gère :
-- Ajout d'un plan d'action lié à un risque (recommandation, responsable, échéance, priorité)
-- Suivi du statut (Ouvert / En cours / Clôturé)
-- Détection automatique des actions en retard
-- KPIs : taux de clôture, actions en retard, actions par responsable
-- Stockage persistant en session_state (à remplacer par une vraie base / Excel si besoin)
-"""
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -46,9 +26,13 @@ def render_plan_action(df_risques: pd.DataFrame):
     with st.expander("➕ Ajouter une nouvelle recommandation", expanded=False):
         with st.form("form_plan_action", clear_on_submit=True):
             col1, col2 = st.columns(2)
+            
+            # Recherche sécurisée de la colonne Processus (majuscule ou minuscule)
+            proc_col = next((c for c in df_risques.columns if c.lower() == 'processus'), None)
+            processus_list = sorted(df_risques[proc_col].dropna().unique()) if proc_col and not df_risques.empty else ["N/A"]
+
             with col1:
-                processus = st.selectbox("Processus", sorted(df_risques["Processus"].unique())
-                                          if "Processus" in df_risques.columns else ["N/A"])
+                processus = st.selectbox("Processus", processus_list)
                 risque = st.text_input("Risque associé")
                 responsable = st.text_input("Responsable")
             with col2:
@@ -85,7 +69,7 @@ def render_plan_action(df_risques: pd.DataFrame):
 
     df = st.session_state.plan_actions.copy()
     if df.empty:
-        st.info("Aucun plan d'action enregistré pour le moment.")
+        st.info("Aucun plan d'action enregistré pour le moment. Utilisez le formulaire ci-dessus pour ajouter une recommandation.")
         return
 
     # ---------- CALCUL RETARD ----------
@@ -102,18 +86,21 @@ def render_plan_action(df_risques: pd.DataFrame):
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total actions", total)
     k2.metric("Taux de clôture", f"{taux_cloture}%")
-    k3.metric("Actions en retard", int(en_retard), delta_color="inverse")
+    k3.metric("Actions en retard", int(en_retard))
     k4.metric("En cours", int((df["Statut"] == "En cours").sum()))
 
     # ---------- GRAPHIQUES ----------
     c1, c2 = st.columns(2)
     with c1:
         fig_statut = px.pie(df, names="Statut", title="Répartition par statut", hole=0.45)
+        fig_statut.update_layout(plot_bgcolor='#FFFFFF')
         st.plotly_chart(fig_statut, use_container_width=True)
     with c2:
-        fig_resp = px.bar(df.groupby("Responsable").size().reset_index(name="Nombre"),
-                           x="Responsable", y="Nombre", title="Actions par responsable")
-        st.plotly_chart(fig_resp, use_container_width=True)
+        if not df.empty and "Responsable" in df.columns:
+            resp_df = df.groupby("Responsable").size().reset_index(name="Nombre")
+            fig_resp = px.bar(resp_df, x="Responsable", y="Nombre", title="Actions par responsable", color="Nombre", color_continuous_scale="Greens")
+            fig_resp.update_layout(plot_bgcolor='#FFFFFF')
+            st.plotly_chart(fig_resp, use_container_width=True)
 
     # ---------- TABLE + MISE A JOUR STATUT ----------
     st.markdown("### 🗂️ Registre des plans d'action")
@@ -124,12 +111,20 @@ def render_plan_action(df_risques: pd.DataFrame):
     st.dataframe(df.style.apply(_highlight_retard, axis=1), use_container_width=True)
 
     st.markdown("### ✏️ Mettre à jour le statut d'une action")
-    action_id = st.selectbox("Sélectionner l'ID de l'action", df["ID"])
-    nouveau_statut = st.selectbox("Nouveau statut", STATUTS)
-    if st.button("Mettre à jour"):
+    col_u1, col_u2, col_u3 = st.columns(3)
+    with col_u1:
+        action_id = st.selectbox("Sélectionner l'ID de l'action", df["ID"])
+    with col_u2:
+        nouveau_statut = st.selectbox("Nouveau statut", STATUTS)
+    with col_u3:
+        st.write("")
+        st.write("")
+        update_btn = st.button("Mettre à jour le Statut")
+
+    if update_btn:
         idx = st.session_state.plan_actions["ID"] == action_id
         st.session_state.plan_actions.loc[idx, "Statut"] = nouveau_statut
         if nouveau_statut == "Clôturé":
             st.session_state.plan_actions.loc[idx, "Date clôture"] = date.today()
-        st.success(f"Action #{action_id} mise à jour → {nouveau_statut}")
+        st.success(f"Action #{action_id} mise à jour avec succès → {nouveau_statut}")
         st.rerun()
