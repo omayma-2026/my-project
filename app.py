@@ -5,10 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLE
+# 1. CONFIGURATION DE LA PAGE & STYLE PROFESSIONNEL
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="ORMVA-TF | Risk Matrix & Analytics",
+    page_title="ORMVA-TF | Enterprise Risk & Audit Center",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -52,29 +52,48 @@ def load_data():
             continue
     return pd.DataFrame()
 
-df = load_data()
-if not df.empty:
-    df.columns = [c.strip().lower() for c in df.columns]
+df_original = load_data()
+if not df_original.empty:
+    df_original.columns = [c.strip().lower() for c in df_original.columns]
+
+# Session state pour la gestion des accès
+if 'users_db' not in st.session_state:
+    st.session_state['users_db'] = pd.DataFrame([
+        {"Nom": "Auditeur Principal", "Email": "audit@ormva-tf.ma", "Rôle": "Auditeur Interne", "Statut": "Actif"},
+        {"Nom": "Responsable P9", "Email": "p9@ormva-tf.ma", "Rôle": "Responsable Processus", "Statut": "Actif"}
+    ])
 
 # ---------------------------------------------------------
-# 3. NAVIGATION (SIDEBAR)
+# 3. NAVIGATION & FILTRAGE PAR PROCESSUS (SIDEBAR)
 # ---------------------------------------------------------
 st.sidebar.title("🏢 Direction de l'Audit")
-if not df.empty:
-    st.sidebar.success(f"✅ Données chargées ({len(df)} risques)")
-else:
-    st.sidebar.error("⚠️ Fichier de données introuvable.")
+st.sidebar.markdown("---")
 
+if not df_original.empty and 'processus' in df_original.columns:
+    st.sidebar.subheader("🔍 Filtre Métier")
+    list_processus = ['Tous les Processus'] + sorted(df_original['processus'].dropna().unique().tolist())
+    selected_proc = st.sidebar.selectbox("Filtrer par Processus :", list_processus)
+    
+    if selected_proc != 'Tous les Processus':
+        df = df_original[df_original['processus'] == selected_proc].copy()
+    else:
+        df = df_original.copy()
+else:
+    df = df_original.copy()
+
+st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "Modules de la Plateforme :",
     [
         "🏠 Dashboard & Répartition (Donut)",
-        "🗺️ Matrice des Risques (Heatmap Style)",
+        "🗺️ Matrice des Risques (Heatmap)",
         "🔥 Top 10 Risques Prioritaires",
+        "👥 Gestion des Accès & Rôles",
         "📋 Registre Détaillé"
     ]
 )
 
+# En-tête institutionnel
 st.markdown("""
     <div class="header-container">
         <div class="header-title">🛡️ ORMVA-TF — Enterprise Risk & Audit Center</div>
@@ -90,9 +109,9 @@ if menu == "🏠 Dashboard & Répartition (Donut)":
     
     if not df.empty:
         m1, m2, m3 = st.columns(3)
-        m1.metric("Risques Totaux", len(df), "Base Officielle")
-        m2.metric("Processus", df['processus'].nunique() if 'processus' in df.columns else 0, "Actifs")
-        m3.metric("Statut", "100% Dynamique", "Conforme PFA")
+        m1.metric("Risques Filtrés / Totaux", f"{len(df)} / {len(df_original)}", "Base Officielle")
+        m2.metric("Processus Actifs", df['processus'].nunique() if 'processus' in df.columns else 0, "Périmètre")
+        m3.metric("Statut Système", "Production", "Audit Interne")
 
         st.write("")
         col_l, col_r = st.columns(2)
@@ -123,8 +142,8 @@ if menu == "🏠 Dashboard & Répartition (Donut)":
 
         with col_r:
             st.subheader("📊 Top Processus par Nombre de Risques")
-            if 'processus' in df.columns:
-                df_proc = df.groupby('processus').size().reset_index(name='Nombre').sort_values(by='Nombre', ascending=True)
+            if 'processus' in df_original.columns:
+                df_proc = df_original.groupby('processus').size().reset_index(name='Nombre').sort_values(by='Nombre', ascending=True)
                 fig_bar = px.bar(
                     df_proc, x='Nombre', y='processus', orientation='h',
                     color='Nombre', color_continuous_scale=['#4E7D5B', '#1E513B', '#0A2F1D'], text='Nombre'
@@ -133,16 +152,15 @@ if menu == "🏠 Dashboard & Répartition (Donut)":
                 st.plotly_chart(fig_bar, use_container_width=True)
 
 # ---------------------------------------------------------
-# MODULE 2: MATRICE DES RISQUES (HEATMAP STYLE SÉCURISÉ)
+# MODULE 2: MATRICE DES RISQUES (HEATMAP)
 # ---------------------------------------------------------
-elif menu == "🗺️ Matrice des Risques (Heatmap Style)":
+elif menu == "🗺️ Matrice des Risques (Heatmap)":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice des Risques</b></div>""", unsafe_allow_html=True)
     st.subheader("🗺️ Matrice d'Évaluation (Probabilité vs Gravité)")
 
     if not df.empty and 'prob' in df.columns and 'grav' in df.columns:
         matrix_data = pd.crosstab(df['grav'], df['prob'])
         
-        # Utilisation de Graph Objects (go.Heatmap) pour éviter tout ValueError de imshow
         fig_matrix = go.Figure(data=go.Heatmap(
             z=matrix_data.values,
             x=[str(c) for c in matrix_data.columns],
@@ -161,16 +179,15 @@ elif menu == "🗺️ Matrice des Risques (Heatmap Style)":
             plot_bgcolor='#FFFFFF'
         )
         st.plotly_chart(fig_matrix, use_container_width=True)
-        st.info("💡 Matrice de criticité brute calculée automatiquement à partir de vos données.")
     else:
-        st.warning("Colonnes 'prob' et 'grav' requises pour afficher la matrice.")
+        st.warning("Colonnes 'prob' et 'grav' requises.")
 
 # ---------------------------------------------------------
 # MODULE 3: TOP 10 RISQUES PRIORITAIRES
 # ---------------------------------------------------------
 elif menu == "🔥 Top 10 Risques Prioritaires":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Top Risques</b></div>""", unsafe_allow_html=True)
-    st.subheader("🔥 Top 10 Risques les plus Critiques (Scoring)")
+    st.subheader("🔥 Top Risques les plus Critiques (Scoring)")
 
     if not df.empty:
         if 'prob' in df.columns and 'grav' in df.columns:
@@ -180,11 +197,11 @@ elif menu == "🔥 Top 10 Risques Prioritaires":
         else:
             df['score_priorite'] = 10
 
-        top10 = df.sort_values(by='score_priorite', ascending=False).head(10)
+        top_risks = df.sort_values(by='score_priorite', ascending=False).head(10)
         
         fig_top = px.bar(
-            top10.sort_values(by='score_priorite', ascending=True),
-            x='score_priorite', y='code' if 'code' in top10.columns else top10.index.astype(str),
+            top_risks.sort_values(by='score_priorite', ascending=True),
+            x='score_priorite', y='code' if 'code' in top_risks.columns else top_risks.index.astype(str),
             orientation='h', color='score_priorite',
             color_continuous_scale=['#F4A261', '#E76F51', '#A31D1D'], text='score_priorite'
         )
@@ -194,17 +211,42 @@ elif menu == "🔥 Top 10 Risques Prioritaires":
         st.warning("Données indisponibles.")
 
 # ---------------------------------------------------------
-# MODULE 4: REGISTRE DÉTAILLÉ
+# MODULE 4: GESTION DES ACCÈS & RÔLES
+# ---------------------------------------------------------
+elif menu == "👥 Gestion des Accès & Rôles":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Gestion des Accès</b></div>""", unsafe_allow_html=True)
+    st.subheader("👥 Console d'Accréditation & Attribution des Rôles")
+    st.dataframe(st.session_state['users_db'], use_container_width=True)
+
+    with st.form("add_user_form"):
+        st.markdown("#### 🔒 Octroyer un nouvel accès utilisateur")
+        u_nom = st.text_input("Nom & Prénom :")
+        u_email = st.text_input("Email institutionnel (@ormva-tf.ma) :")
+        u_role = st.selectbox("Rôle Métier :", ["Auditeur Interne", "Responsable Processus", "Direction Générale"])
+        if st.form_submit_button("Valider et Activer l'Accès"):
+            if u_nom and u_email:
+                new_acc = pd.DataFrame([{"Nom": u_nom, "Email": u_email, "Rôle": u_role, "Statut": "Actif"}])
+                st.session_state['users_db'] = pd.concat([st.session_state['users_db'], new_acc], ignore_index=True)
+                st.success(f"Accès accordé avec succès à {u_nom} !")
+                st.rerun()
+
+# ---------------------------------------------------------
+# MODULE 5: REGISTRE DÉTAILLÉ
 # ---------------------------------------------------------
 elif menu == "📋 Registre Détaillé":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Registre Détaillé</b></div>""", unsafe_allow_html=True)
-    st.subheader("📑 Base de Données Complète")
+    st.subheader("📑 Base de Données Complète des Risques")
     if not df.empty:
-        st.dataframe(df, use_container_width=True, height=550)
+        search = st.text_input("🔍 Rechercher un risque :", "")
+        filtered = df
+        if search:
+            mask = df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
+            filtered = df[mask]
+        st.dataframe(filtered, use_container_width=True, height=550)
 
 # Footer
 st.markdown("""
     <div class="footer-dark">
-        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme (2026)
+        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme Institutionnelle (2026)
     </div>
 """, unsafe_allow_html=True)
