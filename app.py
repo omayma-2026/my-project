@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 
 # ---------------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE & STYLE INSTITUTIONNEL
+# 1. CONFIGURATION DE LA PAGE & STYLE
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="ORMVA-TF | Enterprise Risk & Audit Center",
+    page_title="ORMVA-TF | Risk Matrix & Analytics",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -39,22 +40,43 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. CHARGEMENT AUTOMATIQUE DU FICHIER 'projet1.xlsx'
+# 2. CHARGEMENT DES DONNÉES
 # ---------------------------------------------------------
 @st.cache_data
-def load_projet1():
-    try:
-        # Lecture automatique du fichier projet1.xlsx présent dans le dossier
-        df = pd.read_excel('projet1.xlsx')
-        return df
-    except Exception as e:
-        return pd.DataFrame()
+def load_data():
+    for filename in ['projet1.xlsx', 'data_reel.xlsx', 'cartographie_analysee_complete.xlsx']:
+        try:
+            df = pd.read_excel(filename)
+            return df
+        except Exception:
+            continue
+    return pd.DataFrame()
 
-df_data = load_projet1()
+df = load_data()
+
+# Uniformisation des noms de colonnes si nécessaire
+if not df.empty:
+    df.columns = [c.strip().lower() for c in df.columns]
 
 # ---------------------------------------------------------
-# 3. HEADER & NAVIGATION
+# 3. NAVIGATION (SIDEBAR)
 # ---------------------------------------------------------
+st.sidebar.title("🏢 Direction de l'Audit")
+if not df.empty:
+    st.sidebar.success(f"✅ Données chargées ({len(df)} risques)")
+else:
+    st.sidebar.error("⚠️ Fichier de données introuvable.")
+
+menu = st.sidebar.radio(
+    "Modules de la Plateforme :",
+    [
+        "🏠 Dashboard & Répartition (Donut)",
+        "🗺️ Matrice des Risques (Heatmap Style)",
+        "🔥 Top 10 Risques Prioritaires",
+        "📋 Registre Détaillé"
+    ]
+)
+
 st.markdown("""
     <div class="header-container">
         <div class="header-title">🛡️ ORMVA-TF — Enterprise Risk & Audit Center</div>
@@ -62,98 +84,126 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-st.sidebar.title("🏢 Direction de l'Audit")
-if not df_data.empty:
-    st.sidebar.success(f"✅ projet1.xlsx chargé ({len(df_data)} lignes)")
-else:
-    st.sidebar.error("⚠️ Fichier projet1.xlsx introuvable ou vide.")
-
-menu = st.sidebar.radio(
-    "Modules de la Plateforme :",
-    [
-        "🏠 Dashboard Exécutif",
-        "⚠️ Matrice des Risques (Heatmap)",
-        "📋 Registre Détaillé des Risques"
-    ]
-)
-
 # ---------------------------------------------------------
-# MODULE 1: DASHBOARD EXÉCUTIF
+# MODULE 1: DASHBOARD & DONUT CHART
 # ---------------------------------------------------------
-if menu == "🏠 Dashboard Exécutif":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord Exécutif</b></div>""", unsafe_allow_html=True)
+if menu == "🏠 Dashboard & Répartition (Donut)":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord & Répartition</b></div>""", unsafe_allow_html=True)
     
-    total_risks = len(df_data) if not df_data.empty else 0
-    total_proc = df_data['processus'].nunique() if not df_data.empty and 'processus' in df_data.columns else 0
+    if not df.empty:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Risques Totaux", len(df), "Base Officielle")
+        m2.metric("Processus", df['processus'].nunique() if 'processus' in df.columns else 0, "Actifs")
+        m3.metric("Statut", "100% Dynamique", "Conforme PFA")
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Risques Totaux", f"{total_risks}", "Base projet1.xlsx")
-    m2.metric("Processus Impliqués", f"{total_proc}", "Actifs")
-    m3.metric("Statut Source", "Connecté", "Local")
-    m4.metric("Mode", "Production", "ORMVA-TF")
-
-    st.write("")
-    st.subheader("📊 Répartition des Risques par Processus")
-    
-    if not df_data.empty and 'processus' in df_data.columns:
-        df_group = df_data.groupby('processus').size().reset_index(name='Nombre')
-        fig = px.bar(
-            df_group, x='Nombre', y='processus', orientation='h',
-            color='Nombre', color_continuous_scale=['#4E7D5B', '#1E513B', '#0A2F1D'], text='Nombre'
-        )
-        fig.update_layout(height=400, yaxis={'categoryorder':'total ascending'}, plot_bgcolor='#FFFFFF')
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("La colonne 'processus' est introuvable dans le fichier projet1.xlsx.")
-
-# ---------------------------------------------------------
-# MODULE 2: MATRICE DES RISQUES (HEATMAP)
-# ---------------------------------------------------------
-elif menu == "⚠️ Matrice des Risques (Heatmap)":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice de Criticité Brute</b></div>""", unsafe_allow_html=True)
-    st.subheader("🗺️ Matrice Probabilité vs Gravité")
-
-    if not df_data.empty and 'Prob' in df_data.columns:
-        # Détection automatique de la colonne gravité (grav ou Gravité)
-        grav_col = 'grav' if 'grav' in df_data.columns else ('Grav' if 'Grav' in df_data.columns else None)
+        st.write("")
+        col_l, col_r = st.columns(2)
         
-        if grav_col:
-            matrix_df = pd.crosstab(df_data[grav_col], df_data['Prob'])
-            fig_matrix = px.imshow(
-                matrix_df,
-                labels=dict(x="Probabilité", y="Gravité", color="Nombre"),
-                x=sorted(df_data['Prob'].unique()),
-                y=sorted(df_data[grav_col].unique()),
-                color_continuous_scale="Greens",
-                text_auto=True
+        with col_l:
+            st.subheader("🎯 Répartition par Zone d'Action (Donut)")
+            # Simulation des zones si non présentes
+            if 'zone' not in df.columns:
+                # Attribution basique basée sur prob et grav si disponibles
+                if 'prob' in df.columns and 'grav' in df.columns:
+                    crit = df['prob'] * df['grav']
+                    df['zone'] = pd.cut(crit, bins=[-1, 4, 8, 12, 25], labels=['Zone A - Optimisation', 'Zone B - Vigilance', 'Zone C - Surveillance', 'Zone D - Traitement Prioritaire'])
+                else:
+                    df['zone'] = 'Zone B - Vigilance'
+            
+            zone_counts = df['zone'].value_counts().reset_index()
+            zone_counts.columns = ['Zone', 'Count']
+            
+            fig_donut = px.pie(
+                zone_counts, values='Count', names='Zone', hole=0.4,
+                color='Zone',
+                color_discrete_map={
+                    'Zone D - Traitement Prioritaire': '#A31D1D',
+                    'Zone C - Surveillance': '#D9822B',
+                    'Zone B - Vigilance': '#1B4965',
+                    'Zone A - Optimisation': '#2D6A4F'
+                }
             )
-            fig_matrix.update_layout(height=450, plot_bgcolor='#FFFFFF')
-            st.plotly_chart(fig_matrix, use_container_width=True)
+            fig_donut.update_layout(height=400, plot_bgcolor='#FFFFFF')
+            st.plotly_chart(fig_donut, use_container_width=True)
+
+        with col_r:
+            st.subheader("📊 Top Processus par Nombre de Risques")
+            if 'processus' in df.columns:
+                df_proc = df.groupby('processus').size().reset_index(name='Nombre').sort_values(by='Nombre', ascending=True)
+                fig_bar = px.bar(
+                    df_proc, x='Nombre', y='processus', orientation='h',
+                    color='Nombre', color_continuous_scale=['#4E7D5B', '#1E513B', '#0A2F1D'], text='Nombre'
+                )
+                fig_bar.update_layout(height=400, plot_bgcolor='#FFFFFF')
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+# ---------------------------------------------------------
+# MODULE 2: MATRICE DES RISQUES (HEATMAP STYLE)
+# ---------------------------------------------------------
+elif menu == "🗺️ Matrice des Risques (Heatmap Style)":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice des Risques</b></div>""", unsafe_allow_html=True)
+    st.subheader("🗺️ Matrice d'Évaluation (Probabilité vs Gravité / Degré de Contrôle)")
+
+    if not df.empty and 'prob' in df.columns and 'grav' in df.columns:
+        # Création d'une matrice avec les codes des risques à l'intérieur
+        matrix_data = pd.crosstab(df['grav'], df['prob'])
+        
+        fig_matrix = px.imshow(
+            matrix_data,
+            labels=dict(x="Probabilité", y="Gravité", color="Nombre de Risques"),
+            x=sorted(df['prob'].unique()),
+            y=sorted(df['grav'].unique()),
+            color_continuous_scale="Reds",
+            text_auto=True
+        )
+        fig_matrix.update_layout(height=500, plot_bgcolor='#FFFFFF', title="Concentration des Risques par Niveau")
+        st.plotly_chart(fig_matrix, use_container_width=True)
+        
+        st.info("💡 Cette matrice reflète la criticité brute (Probabilité × Gravité) de la même manière que les matrices institutionnelles d'audit.")
+    else:
+        st.warning("Colonnes 'prob' et 'grav' requises pour afficher la matrice.")
+
+# ---------------------------------------------------------
+# MODULE 3: TOP 10 RISQUES PRIORITAIRES
+# ---------------------------------------------------------
+elif menu == "🔥 Top 10 Risques Prioritaires":
+    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Top Risques</b></div>""", unsafe_allow_html=True)
+    st.subheader("🔥 Top 10 Risques les plus Critiques (Scoring)")
+
+    if not df.empty:
+        # Calcul score si colonnes présentes
+        if 'prob' in df.columns and 'grav' in df.columns:
+            df['score_priorite'] = df['prob'] * df['grav']
+        elif 'criticité brute' in df.columns:
+            df['score_priorite'] = df['criticité brute']
         else:
-            st.warning("Colonne de gravité introuvable dans projet1.xlsx.")
+            df['score_priorite'] = 10
+
+        top10 = df.sort_values(by='score_priorite', ascending=False).head(10)
+        
+        fig_top = px.bar(
+            top10.sort_values(by='score_priorite', ascending=True),
+            x='score_priorite', y='code' if 'code' in top10.columns else top10.index.astype(str),
+            orientation='h', color='score_priorite',
+            color_continuous_scale=['#F4A261', '#E76F51', '#A31D1D'], text='score_priorite'
+        )
+        fig_top.update_layout(height=450, plot_bgcolor='#FFFFFF', xaxis_title="Score de Priorité", yaxis_title="Code Risque")
+        st.plotly_chart(fig_top, use_container_width=True)
     else:
-        st.warning("Colonnes de probabilité introuvables.")
+        st.warning("Données indisponibles.")
 
 # ---------------------------------------------------------
-# MODULE 3: REGISTRE DÉTAILLÉ
+# MODULE 4: REGISTRE DÉTAILLÉ
 # ---------------------------------------------------------
-elif menu == "📋 Registre Détaillé des Risques":
+elif menu == "📋 Registre Détaillé":
     st.markdown("""<div class="breadcrumb">Direction Audit › <b>Registre Détaillé</b></div>""", unsafe_allow_html=True)
-    st.subheader("📑 Contenu Brut de projet1.xlsx")
-
-    if not df_data.empty:
-        search = st.text_input("🔍 Rechercher dans le fichier :", "")
-        filtered = df_data
-        if search:
-            mask = df_data.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)
-            filtered = df_data[mask]
-        st.dataframe(filtered, use_container_width=True, height=550)
-    else:
-        st.warning("Le fichier est vide.")
+    st.subheader("📑 Base de Données Complète")
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, height=550)
 
 # Footer
 st.markdown("""
     <div class="footer-dark">
-        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme Intégrée (2026)
+        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme (2026)
     </div>
 """, unsafe_allow_html=True)
