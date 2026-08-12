@@ -14,7 +14,7 @@ st.set_page_config(page_title="ORMVA-TF | Audit Center", layout="wide")
 def load_official_data():
     file_path = 'cartographie_analysee_complete.xlsx'
     if os.path.exists(file_path):
-        df = pd.read_excel(file_path)
+        df = pd.read_excel(file_path) 
         df.columns = [c.strip().lower() for c in df.columns]
         return df
     return None
