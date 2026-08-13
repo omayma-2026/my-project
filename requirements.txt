@@ -1,11 +1,6 @@
-fastapi
-uvicorn
-pandas
-numpy
-scipy
-scikit-learn
-pydantic
-sqlalchemy
-psycopg2-binary
-python-jose[cryptography]
-passlib[bcrypt]
+streamlit>=1.35
+pandas>=2.0
+numpy>=1.24
+plotly>=5.20
+scipy>=1.11
+openpyxl>=3.1
