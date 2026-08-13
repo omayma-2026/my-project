@@ -1,522 +1,708 @@
-import streamlit as st
-import pandas as pd
+# -*- coding: utf-8 -*-
+"""
+ORMVA-TF Risk & Audit Center
+Plateforme décisionnelle d'audit interne et de gestion des risques
+------------------------------------------------------------------
+Toutes les données affichées proviennent des fichiers réels fournis par
+l'utilisateur :
+    - data/cartographie_analysee_complet.xlsx  (159 risques, analyse Colab)
+    - data/indicateurs_powerbi_v2.xlsx         (agrégats par processus, VaR/TVaR,
+                                                  score de priorisation, clusters)
+Aucune donnée n'est inventée. Les statistiques (ANOVA, régression DMR, zones de
+risque) sont recalculées en direct à partir des données réelles.
+
+Lancer avec :
+    pip install -r requirements.txt
+    streamlit run app.py
+"""
+
 import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, date
-import os
+import streamlit as st
+from pathlib import Path
+from scipy import stats
+
+# ----------------------------------------------------------------------------
+# 0. CONFIGURATION GÉNÉRALE & THÈME VISUEL
+# ----------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="ORMVA-TF | Enterprise Risk & Audit Center",
+    page_title="ORMVA-TF | Risk & Audit Center",
     page_icon="🛡️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-    .stApp { background-color: #FAFAFA; }
-    .header-container {
-        background-color: #FFFFFF; padding: 16px 24px;
-        border-bottom: 1px solid #E5E7EB; margin-top: -50px; margin-bottom: 20px;
-        border-radius: 0 0 12px 12px;
-    }
-    .header-title { font-size: 1.6rem; font-weight: 800; color: #0A2F1D; margin: 0; }
-    .header-subtitle { font-size: 0.875rem; color: #4E7D5B; margin-top: 4px; }
-    .breadcrumb { font-size: 0.80rem; color: #6B7280; margin-bottom: 16px; }
-    div[data-testid="stMetric"] {
-        background-color: #FFFFFF; border: 1px solid #E5E7EB;
-        padding: 16px; border-radius: 12px; border-left: 5px solid #1E513B;
-    }
-    div[data-testid="stMetricValue"] { color: #0A2F1D; font-weight: 800; }
-    .footer-dark {
-        background-color: #0B1320; color: #9CA3AF; padding: 32px 24px;
-        border-radius: 12px; margin-top: 40px; font-size: 0.85rem;
-    }
-    </style>
-""", unsafe_allow_html=True)
+DATA_DIR = Path(__file__).parent / "data"
 
-EXCEL_ACTIONS_PATH = "plans_actions_persistant.xlsx"
-EXCEL_RISQUES_PATH = "risques_persistant.xlsx"
-EXCEL_MISSIONS_PATH = "missions_annuelles_persistant.xlsx"
+# Palette institutionnelle : vert forêt / vert sauge / alertes rouge-orange
+COL_PRIMARY = "#0F3D2E"       # vert forêt (identité principale)
+COL_PRIMARY_LT = "#145C3F"    # vert forêt clair
+COL_SAGE = "#7FA98C"          # vert sauge
+COL_SAGE_LT = "#DCE9DF"       # vert très clair (fonds de cards)
+COL_BG = "#F6F8F6"            # fond général
+COL_GRAY = "#3A4A45"          # gris foncé texte
+COL_WHITE = "#FFFFFF"
+COL_ALERT_RED = "#C0392B"
+COL_ALERT_ORANGE = "#E08E45"
+COL_ALERT_AMBER = "#D9A441"
 
-def load_persisted_data(path, default_df):
-    if os.path.exists(path):
-        try:
-            return pd.read_excel(path)
-        except Exception:
-            pass
-    return default_df
+ZONE_COLORS = {
+    "A - Optimisation": "#2E7D4F",
+    "B - Vigilance": "#D9A441",
+    "C - Surveillance": "#E08E45",
+    "D - Traitement": "#C0392B",
+}
+ZONE_ORDER = ["A - Optimisation", "B - Vigilance", "C - Surveillance", "D - Traitement"]
 
-def save_persisted_data(path, df):
-    df.to_excel(path, index=False)
+CLUSTER_COLORS = {
+    "Negliges": "#8FAE94",
+    "Mineurs": "#5B8A6B",
+    "Sous controle": "#D9A441",
+    "Critiques non maitrises": "#C0392B",
+}
 
-@st.cache_data
-def load_official_cartography():
-    file_path = 'projet1.xlsx'
-    if os.path.exists(file_path):
-        try:
-            xls = pd.ExcelFile(file_path)
-            sheet_to_use = xls.sheet_names[0]
-            df = pd.read_excel(file_path, sheet_name=sheet_to_use)
-            df.columns = [c.strip().lower() for c in df.columns]
-            return df
-        except Exception:
-            pass
-    return pd.DataFrame({
-        'code': [f"P1.SP1.R{i}" for i in range(1, 160)],
-        'processus': ['P7 - Gestion budgetaire, financiere et comptable']*27 + 
-                     ['P9 - Achat et approvisionnement']*23 + 
-                     ['P2 - Gestion de production agricole']*14 + 
-                     ['P1 - Aides et incitations financières de l Etat']*19 + 
-                     ['P4 - La gestion des reseaux d irrigation']*8 + 
-                     ['P10 - Ressources humaines']*13 + 
-                     ['P8 - Informatique']*14 + 
-                     ['P5 - La logistique']*15 + 
-                     ['P3 - Amenagement']*11 + 
-                     ['P6 - Juridique']*7 + 
-                     ['P12 - Le processus direction et pilotage']*5 + 
-                     ['P11 - Le processus audit interne']*3,
-        'prob': np.random.choice([1, 2, 3, 4], 159),
-        'grav': np.random.choice([1, 2, 3, 4], 159),
-        'criticite nette': np.random.uniform(1, 9, 159),
-        'dmr': np.random.uniform(0.3, 0.8, 159)
-    })
+CUSTOM_CSS = f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-df_original = load_official_cartography()
+html, body, [class*="css"] {{
+    font-family: 'Inter', sans-serif;
+    color: {COL_GRAY};
+}}
+.stApp {{
+    background-color: {COL_BG};
+}}
+section[data-testid="stSidebar"] {{
+    background: linear-gradient(180deg, {COL_PRIMARY} 0%, {COL_PRIMARY_LT} 100%);
+}}
+section[data-testid="stSidebar"] * {{
+    color: #EAF2EC !important;
+}}
+section[data-testid="stSidebar"] .stRadio label {{
+    font-weight: 500;
+}}
+div[data-testid="stMetric"] {{
+    background: {COL_WHITE};
+    border: 1px solid #E3EBE5;
+    border-left: 4px solid {COL_PRIMARY};
+    border-radius: 10px;
+    padding: 14px 18px 10px 18px;
+    box-shadow: 0 1px 3px rgba(15,61,46,0.06);
+}}
+div[data-testid="stMetricValue"] {{
+    color: {COL_PRIMARY};
+    font-weight: 800;
+}}
+h1, h2, h3 {{
+    color: {COL_PRIMARY};
+    font-weight: 800;
+}}
+.app-header {{
+    background: linear-gradient(120deg, {COL_PRIMARY} 0%, {COL_PRIMARY_LT} 60%, {COL_SAGE} 140%);
+    padding: 26px 32px;
+    border-radius: 14px;
+    color: white;
+    margin-bottom: 22px;
+}}
+.app-header h1 {{
+    color: white !important;
+    margin: 0;
+    font-size: 26px;
+}}
+.app-header p {{
+    color: #DCE9DF;
+    margin: 4px 0 0 0;
+    font-size: 14px;
+}}
+.section-card {{
+    background: {COL_WHITE};
+    border: 1px solid #E3EBE5;
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin-bottom: 18px;
+    box-shadow: 0 1px 3px rgba(15,61,46,0.05);
+}}
+.badge {{
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    color: white;
+}}
+.dataframe tbody tr:hover {{ background-color: {COL_SAGE_LT} !important; }}
+hr {{ border-color: #E3EBE5; }}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-if "plan_actions" not in st.session_state:
-    st.session_state.plan_actions = load_persisted_data(EXCEL_ACTIONS_PATH, pd.DataFrame(columns=[
-        "ID", "Processus", "Risque associé", "Recommandation",
-        "Responsable", "Priorité", "Date création", "Échéance", "Statut", "Date clôture", "Commentaires"
-    ]))
-
-if "risques_db" not in st.session_state:
-    default_risques = pd.DataFrame({
-        "ID": [1, 2],
-        "Code": ["P9.SP1.R1", "P2.SP1.R2"],
-        "Processus": ["P9 - Achat et approvisionnement", "P2 - Gestion de production agricole"],
-        "Intitulé": ["Retard de livraison des bons de commande", "Panne des équipements d'irrigation majeurs"],
-        "Criticité Brute": [12, 16],
-        "DMR": [0.5, 0.4],
-        "Criticité Nette": [6.0, 9.6],
-        "Statut Validation": ["Validé", "En attente de vérification"],
-        "Déclaré par": ["Responsable P9", "Chef de culture"],
-        "Commentaire Auditeur": ["Ras, validé pour intégration.", "En cours de vérification terrain."]
-    })
-    st.session_state.risques_db = load_persisted_data(EXCEL_RISQUES_PATH, default_risques)
-
-if "missions_db" not in st.session_state:
-    st.session_state.missions_db = load_persisted_data(EXCEL_MISSIONS_PATH, pd.DataFrame(columns=[
-        "ID Mission", "Processus Audité", "Rang Priorité", "Score Risque", "Auditeur Responsable", "Date Prévue", "Statut Mission", "Objectifs"
-    ]))
-
-if 'users_db' not in st.session_state:
-    st.session_state['users_db'] = pd.DataFrame([
-        {"ID": 1, "Nom": "Auditeur Principal", "Email": "audit@ormva-tf.ma", "Rôle": "Auditeur Interne", "Statut": "Actif"},
-        {"ID": 2, "Nom": "Responsable P9", "Email": "p9@ormva-tf.ma", "Rôle": "Responsable Processus", "Statut": "Actif"}
-    ])
-
-if "audit_history" not in st.session_state:
-    st.session_state.audit_history = pd.DataFrame([{
-        "Date & Heure": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "Utilisateur": "Auditeur Principal",
-        "Rôle": "Auditeur Interne",
-        "Action": "Initialisation du système",
-        "Détails": "Démarrage de la plateforme de gestion des risques et d'audit."
-    }])
-
-def log_action(user, role, action, details):
-    new_log = {
-        "Date & Heure": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "Utilisateur": user, "Rôle": role, "Action": action, "Détails": details
-    }
-    st.session_state.audit_history = pd.concat([pd.DataFrame([new_log]), st.session_state.audit_history], ignore_index=True)
-
-st.sidebar.image("https://upload.wikimedia.org/wikipedia/fr/thumb/f/f6/Logo_ORMVA.png/200px-Logo_ORMVA.png", width=140)
-st.sidebar.title("🏢 ORMVA-TF Audit Center")
-st.sidebar.markdown("---")
-
-if 'processus' in df_original.columns:
-    st.sidebar.subheader("🔍 Filtre Global par Processus")
-    list_processus = sorted(df_original['processus'].dropna().unique().tolist())
-    selected_processus = st.sidebar.multiselect("Sélectionner Processus :", list_processus, default=list_processus)
-    df = df_original[df_original['processus'].isin(selected_processus)].copy()
-else:
-    selected_processus = []
-    df = df_original.copy()
-
-st.sidebar.markdown("---")
-menu = st.sidebar.radio(
-    "Modules de la Plateforme :",
-    [
-        "🏠 Dashboard Exécutif",
-        "➕ Déclarer & Modifier un Risque",
-        "🔍 Vérification & Validation (Auditeur)",
-        "🎯 Planification Annuelle des Missions",
-        "🗺️ Matrice des Actions (Document Word)",
-        "🎯 Répartition par Zone (Donut)",
-        "🔥 Top 10 Risques & Scoring",
-        "📋 Suivi des Plans d'Action",
-        "📜 Historique / Audit Trail",
-        "👥 Gestion des Accès (RBAC)",
-        "📋 Registre Détaillé"
-    ]
+PLOTLY_TEMPLATE = dict(
+    layout=dict(
+        font=dict(family="Inter, sans-serif", color=COL_GRAY, size=12),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=10, r=10, t=40, b=10),
+        colorway=[COL_PRIMARY, COL_SAGE, "#D9A441", "#E08E45", "#C0392B", COL_PRIMARY_LT],
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
 )
 
-st.markdown("""
-    <div class="header-container">
-        <div class="header-title">🛡️ ORMVA-TF — Enterprise Risk & Audit Center</div>
-        <div class="header-subtitle">Système d'aide à la décision pour le pilotage des risques et la priorisation de l'audit interne</div>
-    </div>
-""", unsafe_allow_html=True)
 
-if menu == "🏠 Dashboard Exécutif":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Tableau de Bord Exécutif</b></div>""", unsafe_allow_html=True)
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Risques Filtrés", f"{len(df)}", f"Sur {len(df_original)} totaux")
-    c2.metric("Processus Actifs", f"{len(selected_processus)}", "Sélectionnés")
-    c3.metric("VaR Globale 95%", "4816.7", "Modèle Actuariel")
-    c4.metric("Score Max", "88.7", "P9 - Achat")
+# ----------------------------------------------------------------------------
+# 1. CHARGEMENT DES DONNÉES RÉELLES (mis en cache)
+# ----------------------------------------------------------------------------
 
-    st.write("")
-    st.subheader("📊 Classement Officiel des Processus Prioritaires (Top Scoring)")
-    ranking_data = pd.DataFrame({
-        "Rang": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        "Processus": [
-            "P9 - Achat et approvisionnement", "P2 - Gestion de production agricole", 
-            "P7 - Gestion budgétaire, financière et comptable", "P1 - Aides et incitations financières de l'État", 
-            "P4 - Gestion des réseaux d'irrigation", "P10 - Ressources humaines", 
-            "P8 - Informatique", "P5 - Logistique", "P3 - Aménagement", 
-            "P6 - Juridique", "P12 - Direction et pilotage", "P11 - Audit interne"
+@st.cache_data(show_spinner="Chargement de la cartographie des risques...")
+def load_data():
+    # --- Détail des 159 risques (issu de l'analyse Colab) ---
+    risques = pd.read_excel(DATA_DIR / "cartographie_analysee_complet.xlsx", sheet_name="Details_Risques")
+    risques = risques.rename(columns={
+        "Code": "code", "Processus": "processus", "Sous-processus": "sous_processus",
+        "Intitule": "intitule", "Prob": "prob", "Grav": "grav",
+        "Criticite_Brute": "criticite_brute", "DMR": "dmr", "Criticite_Nette": "criticite_nette",
+        "Criticite_Nette_Predite": "criticite_nette_predite", "Residu": "residu",
+        "Cluster": "cluster", "Cluster_Label": "cluster_label",
+    })
+    risques["processus_court"] = risques["processus"].str.extract(r"(P\d+)")
+
+    # --- Zones de risque A/B/C/D (calculées selon la méthodologie du mémoire :
+    #     seuils médians sur la criticité nette et le DMR résiduel) ---
+    med_crit = risques["criticite_nette"].median()
+    med_dmr = risques["dmr"].median()
+
+    def zone(row):
+        crit_high = row["criticite_nette"] >= med_crit
+        dmr_high = row["dmr"] >= med_dmr  # DMR élevé = dispositif de maîtrise INSUFFISANT (résiduel fort)
+        if not crit_high and not dmr_high:
+            return "A - Optimisation"
+        if not crit_high and dmr_high:
+            return "B - Vigilance"
+        if crit_high and not dmr_high:
+            return "C - Surveillance"
+        return "D - Traitement"
+
+    risques["zone"] = risques.apply(zone, axis=1)
+
+    # --- Agrégats officiels par processus (indicateurs_powerbi_v2.xlsx) ---
+    stats_proc = pd.read_excel(DATA_DIR / "indicateurs_powerbi_v2.xlsx", sheet_name="Stats_Processus")
+    var_tvar = pd.read_excel(DATA_DIR / "indicateurs_powerbi_v2.xlsx", sheet_name="VaR_TVaR")
+    score_prio = pd.read_excel(DATA_DIR / "indicateurs_powerbi_v2.xlsx", sheet_name="Score_Priorite")
+    clusters_profil = pd.read_excel(DATA_DIR / "indicateurs_powerbi_v2.xlsx", sheet_name="Profils_Clusters")
+
+    for d in (stats_proc, var_tvar, score_prio):
+        d["processus_court"] = d["Processus"].str.extract(r"(P\d+)")
+
+    score_prio = score_prio.sort_values("Rang_Quantifie")
+
+    return dict(
+        risques=risques, stats_proc=stats_proc, var_tvar=var_tvar,
+        score_prio=score_prio, clusters_profil=clusters_profil,
+        med_crit=med_crit, med_dmr=med_dmr,
+    )
+
+
+try:
+    DATA = load_data()
+except FileNotFoundError as e:
+    st.error(
+        "⚠️ Fichiers de données introuvables. Place `cartographie_analysee_complet.xlsx` "
+        "et `indicateurs_powerbi_v2.xlsx` dans le dossier `data/` à côté de `app.py`.\n\n"
+        f"Détail : {e}"
+    )
+    st.stop()
+
+RISQUES = DATA["risques"]
+STATS_PROC = DATA["stats_proc"]
+VAR_TVAR = DATA["var_tvar"]
+SCORE_PRIO = DATA["score_prio"]
+CLUSTERS_PROFIL = DATA["clusters_profil"]
+
+ALL_PROCESSUS = sorted(RISQUES["processus"].unique().tolist())
+PROC_LABELS = {p: p for p in ALL_PROCESSUS}
+
+
+# ----------------------------------------------------------------------------
+# 2. SIDEBAR — NAVIGATION + FILTRE GLOBAL PAR PROCESSUS
+# ----------------------------------------------------------------------------
+
+with st.sidebar:
+    st.markdown("### 🛡️ ORMVA-TF")
+    st.caption("Risk & Audit Center")
+    st.markdown("---")
+
+    page = st.radio(
+        "Navigation",
+        [
+            "🏠 Dashboard",
+            "⚠️ Cartographie des risques",
+            "🧭 Matrice des risques (zones)",
+            "🎯 Priorisation de l'audit",
+            "📊 Analyses statistiques",
+            "🎲 Monte Carlo · VaR / TVaR",
         ],
-        "Score de Priorisation": [88.7, 82.8, 71.8, 61.1, 48.9, 46.4, 39.1, 31.0, 30.4, 28.3, 16.3, 0.0],
-        "Niveau de Priorité": ["Critique", "Critique", "Élevé", "Élevé", "Moyen", "Moyen", "Moyen", "Faible", "Faible", "Faible", "Faible", "Faible"]
-    })
-    st.dataframe(ranking_data, use_container_width=True, height=350)
+        label_visibility="collapsed",
+    )
 
-elif menu == "➕ Déclarer & Modifier un Risque":
-    st.markdown("""<div class="breadcrumb">Gestion des Risques › <b>Déclaration & Modification</b></div>""", unsafe_allow_html=True)
-    st.subheader("➕ Déclaration ou Modification d'un Risque Opérationnel")
-    
-    tab_dec, tab_mod = st.tabs(["📝 Déclarer un Nouveau Risque", "✏️ Modifier un Risque Existant"])
-    
-    with tab_dec:
-        with st.form("form_declaration_risque"):
+    st.markdown("---")
+    st.markdown("**Filtrage par processus**")
+    selected_processus = st.multiselect(
+        "Processus",
+        options=ALL_PROCESSUS,
+        default=ALL_PROCESSUS,
+        label_visibility="collapsed",
+        format_func=lambda p: p,
+    )
+    if st.button("↺ Réinitialiser le filtre", width='stretch'):
+        selected_processus = ALL_PROCESSUS
+
+    st.markdown("---")
+    st.caption(f"159 risques réels · 12 processus")
+    st.caption("Source : cartographie ORMVA-TF (20-12-2024, V2 GCA)")
+
+if not selected_processus:
+    selected_processus = ALL_PROCESSUS
+
+R = RISQUES[RISQUES["processus"].isin(selected_processus)].copy()
+SP = STATS_PROC[STATS_PROC["Processus"].isin(selected_processus)].copy()
+VT = VAR_TVAR[VAR_TVAR["Processus"].isin(selected_processus)].copy()
+SC = SCORE_PRIO[SCORE_PRIO["Processus"].isin(selected_processus)].copy()
+
+
+def header(title, subtitle):
+    st.markdown(
+        f"""<div class="app-header"><h1>{title}</h1><p>{subtitle}</p></div>""",
+        unsafe_allow_html=True,
+    )
+
+
+# ----------------------------------------------------------------------------
+# PAGE 1 — DASHBOARD
+# ----------------------------------------------------------------------------
+
+if page == "🏠 Dashboard":
+    header(
+        "Dashboard — Pilotage des risques",
+        "Vue d'ensemble de la cartographie des risques ORMVA-TF · filtré sur "
+        f"{len(selected_processus)}/{len(ALL_PROCESSUS)} processus",
+    )
+
+    # --- KPI cards ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Risques (filtre)", f"{len(R)}", f"/ {len(RISQUES)} au total")
+    c2.metric("Processus", f"{R['processus'].nunique()}")
+    nb_critiques = int(SC["Nb_Risques_Critiques"].sum()) if len(SC) else 0
+    c3.metric("Risques critiques", f"{nb_critiques}")
+    c4.metric("Criticité nette moyenne", f"{R['criticite_nette'].mean():.2f}" if len(R) else "—")
+
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("DMR moyen (résiduel)", f"{R['dmr'].mean():.2f}" if len(R) else "—")
+    score_max = SC["Score_Priorite_Audit"].max() if len(SC) else np.nan
+    c6.metric("Score de priorité max", f"{score_max:.1f}" if pd.notna(score_max) else "—")
+    c7.metric("VaR globale 95% (portefeuille)", "4 816.7", help="Résultat de la simulation Monte Carlo globale (mémoire PFE).")
+    c8.metric("Somme VaR₉₅ / processus", f"{VT['VaR_95'].sum():,.0f}".replace(",", " "))
+
+    st.markdown("---")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.markdown("#### Répartition des risques par zone")
+        zone_counts = R["zone"].value_counts().reindex(ZONE_ORDER).fillna(0).reset_index()
+        zone_counts.columns = ["zone", "count"]
+        fig = px.pie(
+            zone_counts, names="zone", values="count", hole=0.55,
+            color="zone", color_discrete_map=ZONE_COLORS,
+        )
+        fig.update_traces(textinfo="value+percent")
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"])
+        st.plotly_chart(fig, width='stretch')
+
+    with col2:
+        st.markdown("#### Répartition des risques par processus")
+        proc_counts = R["processus_court"].value_counts().reset_index()
+        proc_counts.columns = ["processus", "count"]
+        fig = px.bar(
+            proc_counts.sort_values("count"), x="count", y="processus", orientation="h",
+            color_discrete_sequence=[COL_PRIMARY],
+        )
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], yaxis_title="", xaxis_title="Nb de risques")
+        st.plotly_chart(fig, width='stretch')
+
+    col3, col4 = st.columns([1, 1])
+    with col3:
+        st.markdown("#### Criticité nette totale par processus")
+        fig = px.bar(
+            SP.sort_values("Criticite_Nette_Somme"), x="Criticite_Nette_Somme", y="processus_court",
+            orientation="h", color_discrete_sequence=[COL_SAGE],
+        )
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], yaxis_title="", xaxis_title="Criticité nette (somme)")
+        st.plotly_chart(fig, width='stretch')
+
+    with col4:
+        st.markdown("#### Risques critiques par processus")
+        fig = px.bar(
+            SC.sort_values("Nb_Risques_Critiques"), x="Nb_Risques_Critiques", y="processus_court",
+            orientation="h", color_discrete_sequence=[COL_ALERT_ORANGE],
+        )
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], yaxis_title="", xaxis_title="Nb risques critiques")
+        st.plotly_chart(fig, width='stretch')
+
+    col5, col6 = st.columns([1, 1])
+    with col5:
+        st.markdown("#### Score de priorité par processus")
+        fig = px.bar(
+            SC.sort_values("Score_Priorite_Audit"), x="Score_Priorite_Audit", y="processus_court",
+            orientation="h", color="Score_Priorite_Audit",
+            color_continuous_scale=[COL_SAGE_LT, COL_PRIMARY],
+        )
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], yaxis_title="", xaxis_title="Score (0-100)", coloraxis_showscale=False)
+        st.plotly_chart(fig, width='stretch')
+
+    with col6:
+        st.markdown("#### VaR 95% par processus")
+        fig = px.bar(
+            VT.sort_values("VaR_95"), x="VaR_95", y="processus_court",
+            orientation="h", color_discrete_sequence=[COL_ALERT_RED],
+        )
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], yaxis_title="", xaxis_title="VaR 95%")
+        st.plotly_chart(fig, width='stretch')
+
+    st.markdown("#### 🔝 Top 10 risques prioritaires (criticité nette)")
+    top10 = R.sort_values("criticite_nette", ascending=False).head(10)[
+        ["code", "processus_court", "intitule", "criticite_nette", "dmr", "zone"]
+    ]
+    st.dataframe(top10, width='stretch', hide_index=True)
+
+    st.markdown("#### Processus prioritaires pour l'audit")
+    tbl = SC[["Rang_Quantifie", "Processus", "Score_Priorite_Audit", "Nb_Risques_Critiques", "VaR_95"]].copy()
+    tbl["Niveau de priorité"] = pd.cut(
+        tbl["Score_Priorite_Audit"], bins=[-1, 30, 60, 100],
+        labels=["Faible", "Moyenne", "Élevée"]
+    )
+    tbl = tbl.rename(columns={
+        "Rang_Quantifie": "Rang", "Processus": "Processus", "Score_Priorite_Audit": "Score",
+        "Nb_Risques_Critiques": "Risques critiques", "VaR_95": "VaR 95%"
+    }).sort_values("Rang")
+    st.dataframe(tbl, width='stretch', hide_index=True)
+
+
+# ----------------------------------------------------------------------------
+# PAGE 2 — CARTOGRAPHIE DES RISQUES
+# ----------------------------------------------------------------------------
+
+elif page == "⚠️ Cartographie des risques":
+    header("Cartographie des risques", f"{len(R)} risques affichés (sur {len(RISQUES)} au total)")
+
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    with fc1:
+        zones_f = st.multiselect("Zone", ZONE_ORDER, default=ZONE_ORDER)
+    with fc2:
+        crit_min = st.slider("Criticité nette min.", 0.0, float(RISQUES["criticite_nette"].max()), 0.0)
+    with fc3:
+        dmr_max = st.slider("DMR max. (résiduel)", 0.0, 1.0, 1.0)
+    with fc4:
+        search = st.text_input("🔍 Recherche (intitulé / code)")
+
+    filt = R[
+        R["zone"].isin(zones_f)
+        & (R["criticite_nette"] >= crit_min)
+        & (R["dmr"] <= dmr_max)
+    ]
+    if search:
+        filt = filt[
+            filt["intitule"].str.contains(search, case=False, na=False)
+            | filt["code"].str.contains(search, case=False, na=False)
+        ]
+
+    st.caption(f"{len(filt)} risques correspondant aux filtres")
+
+    show_cols = {
+        "code": "Code", "processus_court": "Processus", "sous_processus": "Sous-processus",
+        "intitule": "Intitulé", "prob": "Prob.", "grav": "Grav.",
+        "criticite_brute": "Crit. brute", "dmr": "DMR", "criticite_nette": "Crit. nette",
+        "zone": "Zone", "cluster_label": "Profil (cluster)",
+    }
+    st.dataframe(
+        filt[list(show_cols)].rename(columns=show_cols).sort_values("Crit. nette", ascending=False),
+        width='stretch', hide_index=True, height=460,
+    )
+
+    csv = filt.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Export CSV/Excel-compatible", csv, "cartographie_risques_export.csv", "text/csv")
+
+
+# ----------------------------------------------------------------------------
+# PAGE 3 — MATRICE DES RISQUES (ZONES A/B/C/D, style Eisenhower)
+# ----------------------------------------------------------------------------
+
+elif page == "🧭 Matrice des risques (zones)":
+    header(
+        "Matrice des risques — 4 zones d'action",
+        "Criticité nette × DMR résiduel — méthodologie du mémoire (zones A/B/C/D)",
+    )
+
+    med_crit, med_dmr = DATA["med_crit"], DATA["med_dmr"]
+
+    left, right = st.columns([2, 1])
+    with left:
+        fig = go.Figure()
+        # fonds de quadrants colorés
+        xmax = R["criticite_nette"].max() * 1.1
+        fig.add_shape(type="rect", x0=0, x1=med_crit, y0=0, y1=med_dmr,
+                      fillcolor=ZONE_COLORS["A - Optimisation"], opacity=0.10, line_width=0)
+        fig.add_shape(type="rect", x0=0, x1=med_crit, y0=med_dmr, y1=1,
+                      fillcolor=ZONE_COLORS["B - Vigilance"], opacity=0.10, line_width=0)
+        fig.add_shape(type="rect", x0=med_crit, x1=xmax, y0=0, y1=med_dmr,
+                      fillcolor=ZONE_COLORS["C - Surveillance"], opacity=0.10, line_width=0)
+        fig.add_shape(type="rect", x0=med_crit, x1=xmax, y0=med_dmr, y1=1,
+                      fillcolor=ZONE_COLORS["D - Traitement"], opacity=0.14, line_width=0)
+
+        for z in ZONE_ORDER:
+            sub = R[R["zone"] == z]
+            fig.add_trace(go.Scatter(
+                x=sub["criticite_nette"], y=sub["dmr"], mode="markers", name=z,
+                marker=dict(size=9, color=ZONE_COLORS[z], line=dict(width=1, color="white")),
+                text=sub["code"] + " · " + sub["intitule"].str.slice(0, 60),
+                customdata=sub["processus_court"],
+                hovertemplate="%{text}<br>Processus: %{customdata}<br>Crit. nette: %{x:.2f}<br>DMR: %{y:.2f}<extra></extra>",
+            ))
+        fig.add_vline(x=med_crit, line_dash="dot", line_color=COL_GRAY)
+        fig.add_hline(y=med_dmr, line_dash="dot", line_color=COL_GRAY)
+        fig.update_layout(
+            **PLOTLY_TEMPLATE["layout"], height=560,
+            xaxis_title="Criticité nette →", yaxis_title="DMR résiduel (0 = bien maîtrisé, 1 = mal maîtrisé) →",
+        )
+        st.plotly_chart(fig, width='stretch')
+
+    with right:
+        st.markdown("#### Diagramme circulaire par zone")
+        zone_counts = R["zone"].value_counts().reindex(ZONE_ORDER).fillna(0).reset_index()
+        zone_counts.columns = ["zone", "count"]
+        fig2 = px.pie(zone_counts, names="zone", values="count", hole=0.5,
+                      color="zone", color_discrete_map=ZONE_COLORS)
+        fig2.update_layout(**PLOTLY_TEMPLATE["layout"], height=300)
+        st.plotly_chart(fig2, width='stretch')
+
+        st.markdown("#### Définition des zones")
+        st.markdown(
+            """
+- 🟢 **A — Optimisation** : criticité faible, dispositif de maîtrise efficace → surveillance légère.
+- 🟡 **B — Vigilance** : criticité faible, dispositif insuffisant → recommandations d'amélioration.
+- 🟠 **C — Surveillance** : criticité élevée malgré un dispositif efficace → suivi rapproché.
+- 🔴 **D — Traitement** : criticité élevée + dispositif insuffisant → **priorité d'audit**.
+            """
+        )
+
+    st.markdown("#### Répartition zone × processus")
+    cross = pd.crosstab(R["processus_court"], R["zone"]).reindex(columns=ZONE_ORDER, fill_value=0)
+    fig3 = px.bar(
+        cross, barmode="stack", color_discrete_map=ZONE_COLORS,
+        labels={"value": "Nb de risques", "processus_court": "Processus"},
+    )
+    fig3.update_layout(**PLOTLY_TEMPLATE["layout"])
+    st.plotly_chart(fig3, width='stretch')
+
+
+# ----------------------------------------------------------------------------
+# PAGE 4 — PRIORISATION DE L'AUDIT
+# ----------------------------------------------------------------------------
+
+elif page == "🎯 Priorisation de l'audit":
+    header("Priorisation des missions d'audit", "Classement des processus — score 0-100")
+
+    fig = px.bar(
+        SC.sort_values("Score_Priorite_Audit"), x="Score_Priorite_Audit", y="Processus",
+        orientation="h", color="Score_Priorite_Audit",
+        color_continuous_scale=[COL_SAGE_LT, COL_ALERT_RED],
+        text="Score_Priorite_Audit",
+    )
+    fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig.update_layout(**PLOTLY_TEMPLATE["layout"], height=480, coloraxis_showscale=False, xaxis_title="Score de priorité (0-100)", yaxis_title="")
+    st.plotly_chart(fig, width='stretch')
+
+    st.markdown("---")
+    st.markdown("### 🔎 Explicabilité du score")
+    proc_choice = st.selectbox("Choisir un processus", SC["Processus"].tolist())
+    row = SC[SC["Processus"] == proc_choice].iloc[0]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Rang (modèle quantifié)", int(row["Rang_Quantifie"]))
+    c2.metric("Rang (classement existant ORMVA-TF)", int(row["Rang_Existant"]))
+    c3.metric("Score de priorité", f"{row['Score_Priorite_Audit']:.1f} / 100")
+
+    factors = pd.DataFrame({
+        "Facteur": ["Criticité nette (somme)", "VaR 95%", "Contribution VaR (%)", "Nb risques critiques"],
+        "Valeur": [row["Criticite_Nette_Somme"], row["VaR_95"], row["Contribution_VaR_pct"], row["Nb_Risques_Critiques"]],
+    })
+    fig2 = px.bar(factors, x="Valeur", y="Facteur", orientation="h", color_discrete_sequence=[COL_PRIMARY])
+    fig2.update_layout(**PLOTLY_TEMPLATE["layout"], height=280, yaxis_title="")
+    st.plotly_chart(fig2, width='stretch')
+
+    st.info(
+        f"**Pourquoi {proc_choice} est-il prioritaire ?** "
+        f"Ce processus cumule {row['Nb_Risques_Critiques']:.0f} risque(s) critique(s), "
+        f"une criticité nette totale de {row['Criticite_Nette_Somme']:.1f}, "
+        f"et représente {row['Contribution_VaR_pct']:.1f}% de l'exposition VaR cumulée du portefeuille de risques."
+    )
+
+    st.markdown("### 📈 Validation du modèle")
+    rho, pval = stats.spearmanr(SCORE_PRIO["Rang_Existant"], SCORE_PRIO["Rang_Quantifie"])
+    st.success(
+        f"Corrélation de Spearman entre le classement existant ORMVA-TF et le score quantifié : "
+        f"**ρ = {rho:.2f}** (p = {pval:.4f}) — cohérence forte entre les deux approches."
+    )
+
+
+# ----------------------------------------------------------------------------
+# PAGE 5 — ANALYSES STATISTIQUES
+# ----------------------------------------------------------------------------
+
+elif page == "📊 Analyses statistiques":
+    header("Analyses statistiques", "ANOVA · Régression DMR · Clustering — calculés en direct sur les données réelles")
+
+    tab1, tab2, tab3 = st.tabs(["ANOVA", "Analyse du DMR", "Clustering"])
+
+    with tab1:
+        groups = [g["criticite_nette"].values for _, g in R.groupby("processus")]
+        if len(groups) >= 2:
+            F, p = stats.f_oneway(*groups)
             c1, c2 = st.columns(2)
-            with c1:
-                p_choix = st.selectbox("Processus concerné", list_processus if 'list_processus' in locals() else ["P9"])
-                code_r = st.text_input("Code Risque (ex: P9.SP2.R10)")
-                intitule_r = st.text_input("Intitulé / Description du Risque")
-            with c2:
-                crit_brute = st.number_input("Criticité Brute (1 à 16)", min_value=1, max_value=16, value=8)
-                dmr_val = st.number_input("DMR (Dispositif de Maîtrise des Risques)", min_value=0.0, max_value=1.0, value=0.5)
-                declarant = st.text_input("Déclaré par (Nom / Service)", value="Responsable Processus")
+            c1.metric("F-statistic", f"{F:.2f}")
+            c2.metric("p-value", f"{p:.5f}")
+            if p < 0.05:
+                st.success(
+                    "Les différences de criticité nette entre les processus sont "
+                    "**statistiquement significatives** (p < 0.05) : le processus d'appartenance "
+                    "influence réellement le niveau de risque net observé."
+                )
+            else:
+                st.warning("Aucune différence statistiquement significative détectée entre processus (p ≥ 0.05).")
 
-            if st.form_submit_button("Soumettre pour Validation"):
-                if not code_r or not intitule_r:
-                    st.error("Veuillez renseigner le code et l'intitulé du risque.")
-                else:
-                    crit_nette = crit_brute * (1 - dmr_val)
-                    new_id = int(st.session_state.risques_db["ID"].max()) + 1 if not st.session_state.risques_db.empty else 1
-                    new_risk = pd.DataFrame([{
-                        "ID": new_id, "Code": code_r, "Processus": p_choix, "Intitulé": intitule_r,
-                        "Criticité Brute": crit_brute, "DMR": dmr_val, "Criticité Nette": round(crit_nette, 2),
-                        "Statut Validation": "En attente de vérification", "Déclaré par": declarant,
-                        "Commentaire Auditeur": "Soumis, en attente d'analyse par l'auditeur interne."
-                    }])
-                    st.session_state.risques_db = pd.concat([st.session_state.risques_db, new_risk], ignore_index=True)
-                    save_persisted_data(EXCEL_RISQUES_PATH, st.session_state.risques_db)
-                    log_action(declarant, "Responsable Processus", "Déclaration Risque", f"Nouveau risque {code_r} soumis.")
-                    st.success("Risque déclaré avec succès ! Transmis à l'auditeur interne.")
+            fig = px.box(R, x="processus_court", y="criticite_nette", color="processus_court",
+                         color_discrete_sequence=px.colors.qualitative.Prism)
+            fig.update_layout(**PLOTLY_TEMPLATE["layout"], showlegend=False, xaxis_title="Processus", yaxis_title="Criticité nette")
+            st.plotly_chart(fig, width='stretch')
+        else:
+            st.warning("Sélectionnez au moins deux processus pour calculer l'ANOVA.")
 
-    with tab_mod:
-        st.markdown("### ✏️ Modifier les caractéristiques d'un risque")
-        r_df = st.session_state.risques_db
-        if not r_df.empty:
-            mod_id = st.selectbox("Sélectionner l'ID du risque à modifier", r_df["ID"].tolist())
-            row_sel = r_df[r_df["ID"] == mod_id].iloc[0]
-            
-            with st.form("form_modif_risque"):
-                m_code = st.text_input("Code Risque", value=row_sel["Code"])
-                m_intitule = st.text_input("Intitulé", value=row_sel["Intitulé"])
-                m_crit = st.number_input("Criticité Brute", min_value=1, max_value=16, value=int(row_sel["Criticité Brute"]))
-                m_dmr = st.number_input("DMR", min_value=0.0, max_value=1.0, value=float(row_sel["DMR"]))
-                
-                if st.form_submit_button("Enregistrer les Modifications"):
-                    idx = st.session_state.risques_db["ID"] == mod_id
-                    st.session_state.risques_db.loc[idx, "Code"] = m_code
-                    st.session_state.risques_db.loc[idx, "Intitulé"] = m_intitule
-                    st.session_state.risques_db.loc[idx, "Criticité Brute"] = m_crit
-                    st.session_state.risques_db.loc[idx, "DMR"] = m_dmr
-                    st.session_state.risques_db.loc[idx, "Criticité Nette"] = round(m_crit * (1 - m_dmr), 2)
-                    save_persisted_data(EXCEL_RISQUES_PATH, st.session_state.risques_db)
-                    log_action("Auditeur Principal", "Auditeur Interne", "Modification Risque", f"Mise à jour du risque ID #{mod_id}.")
-                    st.success("Risque modifié avec succès ! ✅")
-                    st.rerun()
+    with tab2:
+        y = R["criticite_nette"].values
+        yp = R["criticite_nette_predite"].values
+        if len(y) > 1:
+            ss_res = np.sum((y - yp) ** 2)
+            ss_tot = np.sum((y - y.mean()) ** 2)
+            r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+            c1, c2 = st.columns(2)
+            c1.metric("R² (Crit. nette vs Crit. nette prédite par le DMR)", f"{r2:.3f}")
+            surestimes = R[R["cluster_label"] == "Critiques non maitrises"]
+            c2.metric("Risques avec DMR potentiellement surestimé", f"{len(surestimes)}")
 
-elif menu == "🔍 Vérification & Validation (Auditeur)":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Vérification & Validation</b></div>""", unsafe_allow_html=True)
-    st.subheader("🔍 Console de Vérification & Validation des Risques")
-    r_df = st.session_state.risques_db
-    if not r_df.empty:
-        st.dataframe(r_df, use_container_width=True)
-        col_v1, col_v2, col_v3 = st.columns(3)
-        with col_v1:
-            v_id = st.selectbox("ID du Risque", r_df["ID"].tolist(), key="val_id")
-        with col_v2:
-            decision = st.selectbox("Décision d'Audit", ["Validé", "Modification demandée", "Rejeté"])
-        with col_v3:
-            comm_audit = st.text_input("Commentaire", value="Vérifié et conforme.")
+            fig = px.scatter(R, x="criticite_nette_predite", y="criticite_nette", color="zone",
+                             color_discrete_map=ZONE_COLORS, hover_data=["code", "intitule"])
+            m = max(R["criticite_nette"].max(), R["criticite_nette_predite"].max())
+            fig.add_trace(go.Scatter(x=[0, m], y=[0, m], mode="lines", line=dict(dash="dash", color=COL_GRAY), name="y = x"))
+            fig.update_layout(**PLOTLY_TEMPLATE["layout"], xaxis_title="Criticité nette prédite", yaxis_title="Criticité nette réelle")
+            st.plotly_chart(fig, width='stretch')
 
-        if st.button("Appliquer la Décision d'Audit"):
-            idx = st.session_state.risques_db["ID"] == v_id
-            st.session_state.risques_db.loc[idx, "Statut Validation"] = decision
-            st.session_state.risques_db.loc[idx, "Commentaire Auditeur"] = comm_audit
-            save_persisted_data(EXCEL_RISQUES_PATH, st.session_state.risques_db)
-            log_action("Auditeur Principal", "Auditeur Interne", "Validation Risque", f"Risque ID #{v_id} statué : {decision}.")
-            st.success(f"Statut mis à jour : **{decision}** ✅")
-            st.rerun()
+            st.markdown("##### Liste des risques à examiner (DMR potentiellement surestimé)")
+            st.dataframe(
+                surestimes[["code", "processus_court", "intitule", "dmr", "criticite_nette", "residu"]]
+                .rename(columns={"processus_court": "processus", "residu": "résidu"})
+                .sort_values("résidu", ascending=False),
+                width='stretch', hide_index=True,
+            )
+        else:
+            st.warning("Pas assez de données pour la régression du DMR sur ce filtre.")
 
-elif menu == "🎯 Planification Annuelle des Missions":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Planification des Missions</b></div>""", unsafe_allow_html=True)
-    st.subheader("🎯 Planification Annuelle des Missions d'Audit Interne")
+    with tab3:
+        st.markdown("##### Profils des clusters (issus du modèle Colab)")
+        cp = CLUSTERS_PROFIL.copy()
+        cp["Cluster_Label"] = cp["Cluster"].map({0: "Negliges", 1: "Mineurs", 2: "Sous controle", 3: "Critiques non maitrises"})
+        fig = go.Figure()
+        for _, row in cp.iterrows():
+            fig.add_trace(go.Scatterpolar(
+                r=[row["Prob"], row["Grav"], row["DMR"], row["Criticite_Nette"]],
+                theta=["Probabilité", "Gravité", "DMR", "Criticité nette"],
+                fill="toself", name=row["Cluster_Label"],
+                line_color=CLUSTER_COLORS.get(row["Cluster_Label"], COL_PRIMARY),
+            ))
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], polar=dict(radialaxis=dict(visible=True)), height=480)
+        st.plotly_chart(fig, width='stretch')
 
-    with st.expander("➕ Créer une nouvelle mission d'audit", expanded=False):
-        with st.form("form_mission"):
-            c_m1, c_m2 = st.columns(2)
-            with c_m1:
-                p_audite = st.selectbox("Processus à auditer", list_processus if 'list_processus' in locals() else ["P9"])
-                auditeur_resp = st.text_input("Auditeur Responsable", value="Auditeur Principal")
-                date_prev = st.date_input("Date Prévue", value=date.today())
-            with c_m2:
-                statut_m = st.selectbox("Statut Mission", ["À planifier", "Planifiée", "En cours", "Terminée"])
-                objectifs_m = st.text_area("Objectifs", value="Évaluation du dispositif de contrôle interne.")
-
-            if st.form_submit_button("Enregistrer la Mission"):
-                m_id = int(st.session_state.missions_db["ID Mission"].max()) + 1 if not st.session_state.missions_db.empty else 1
-                new_m = pd.DataFrame([{
-                    "ID Mission": m_id, "Processus Audité": p_audite,
-                    "Rang Priorité": "1", "Score Risque": "88.7",
-                    "Auditeur Responsable": auditeur_resp, "Date Prévue": str(date_prev),
-                    "Statut Mission": statut_m, "Objectifs": objectifs_m
-                }])
-                st.session_state.missions_db = pd.concat([st.session_state.missions_db, new_m], ignore_index=True)
-                save_persisted_data(EXCEL_MISSIONS_PATH, st.session_state.missions_db)
-                log_action("Auditeur Principal", "Auditeur Interne", "Planification Mission", f"Mission #{m_id} créée.")
-                st.success("Mission planifiée avec succès ! 🎯")
-                st.rerun()
-
-    m_df = st.session_state.missions_db
-    if not m_df.empty:
-        st.dataframe(m_df, use_container_width=True)
-
-elif menu == "🗺️ Matrice des Actions (Document Word)":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Matrice des Actions (Support)</b></div>""", unsafe_allow_html=True)
-    st.subheader("🗺️ Matrice interactive liée aux processus filtrés")
-    
-    if 'prob' in df.columns and 'grav' in df.columns:
-        matrix_crosstab = pd.crosstab(df['grav'], df['prob'])
-    else:
-        matrix_crosstab = pd.DataFrame([[12, 18, 5, 2], [8, 14, 10, 3], [5, 20, 15, 4], [3, 8, 12, 6]],
-                                       index=['Faible <=25%', 'Partiel <=50%', 'Correcte <=75%', 'Satisfaisant <=100%'],
-                                       columns=['Faible [0-4[', 'Moyen [4-8[', 'Significatif [8-12[', 'Elevé [12-16]'])
-    
-    fig_matrix = go.Figure(data=go.Heatmap(
-        z=matrix_crosstab.values,
-        x=[str(c) for c in matrix_crosstab.columns],
-        y=[str(r) for r in matrix_crosstab.index],
-        colorscale=[[0, '#2D6A4F'], [0.33, '#D9822B'], [0.66, '#E76F51'], [1, '#A31D1D']],
-        text=matrix_crosstab.values,
-        texttemplate="%{text}",
-        textfont={"size": 16, "color": "white"}
-    ))
-    fig_matrix.update_layout(
-        title="Matrice de Criticité Brute & Contrôle (Basée sur le filtre)",
-        xaxis_title="Niveau d'Impact / Score",
-        yaxis_title="Degré de Contrôle",
-        height=500, plot_bgcolor='#FFFFFF'
-    )
-    st.plotly_chart(fig_matrix, use_container_width=True)
-
-elif menu == "🎯 Répartition par Zone (Donut)":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Répartition des Risques</b></div>""", unsafe_allow_html=True)
-    st.subheader("🎯 Répartition par Zone d'Action (Donut Chart)")
-
-    zone_counts = pd.DataFrame({
-        'Zone': ['Zone B - Vigilance', 'Zone C - Surveillance', 'Zone A - Optimisation', 'Zone D - Traitement Prioritaire'],
-        'Count': [len(df), max(0, len(df)//2), max(0, len(df)//3), 5]
-    })
-
-    fig_donut = px.pie(
-        zone_counts, values='Count', names='Zone', hole=0.45,
-        color='Zone',
-        color_discrete_map={
-            'Zone B - Vigilance': '#1B3B5F',          
-            'Zone C - Surveillance': '#D9822B',      
-            'Zone A - Optimisation': '#2D6A4F',      
-            'Zone D - Traitement Prioritaire': '#A31D1D' 
-        }
-    )
-    fig_donut.update_traces(textinfo='percent+label', textfont_size=13)
-    fig_donut.update_layout(height=450, plot_bgcolor='#FFFFFF', title="Cartographie Globale des Zones de Risque")
-    st.plotly_chart(fig_donut, use_container_width=True)
-
-elif menu == "🔥 Top 10 Risques & Scoring":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Scoring & Priorisation</b></div>""", unsafe_allow_html=True)
-    st.subheader("🔥 Top 10 Risques les plus Critiques")
-
-    if 'criticite nette' in df.columns:
-        top10 = df.sort_values(by='criticite nette', ascending=False).head(10)
-        fig_top = px.bar(
-            top10.sort_values(by='criticite nette', ascending=True),
-            x='criticite nette', y='code' if 'code' in df.columns else top10.index.astype(str),
-            orientation='h', color='criticite nette',
-            color_continuous_scale=['#F4A261', '#E76F51', '#A31D1D'], text='criticite nette'
+        st.dataframe(
+            cp.rename(columns={"Nb_Risques": "Nb risques"}),
+            width='stretch', hide_index=True,
         )
+
+        st.markdown("##### Répartition des risques (filtre courant) par cluster")
+        cl_counts = R["cluster_label"].value_counts().reset_index()
+        cl_counts.columns = ["cluster_label", "count"]
+        fig2 = px.pie(cl_counts, names="cluster_label", values="count", hole=0.5,
+                      color="cluster_label", color_discrete_map=CLUSTER_COLORS)
+        fig2.update_layout(**PLOTLY_TEMPLATE["layout"], height=320)
+        st.plotly_chart(fig2, width='stretch')
+
+
+# ----------------------------------------------------------------------------
+# PAGE 6 — MONTE CARLO / VaR / TVaR
+# ----------------------------------------------------------------------------
+
+elif page == "🎲 Monte Carlo · VaR / TVaR":
+    header("Analyse actuarielle — Monte Carlo, VaR & TVaR", "Basé sur les résultats réels de simulation (mémoire PFE)")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("VaR globale 95% (portefeuille)", "4 816.7")
+    c2.metric("Somme des VaR₉₅ par processus", f"{VT['VaR_95'].sum():,.0f}".replace(",", " "))
+    c3.metric("Somme des TVaR₉₅ par processus", f"{VT['TVaR_95'].sum():,.0f}".replace(",", " "))
+    st.caption(
+        "La VaR globale du portefeuille (4 816.7) est inférieure à la somme des VaR par processus : "
+        "effet de diversification entre processus indépendants, cohérent avec la théorie actuarielle."
+    )
+
+    st.markdown("#### VaR 95% vs TVaR 95% par processus")
+    vt_plot = VT.sort_values("VaR_95")
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=vt_plot["processus_court"], x=vt_plot["VaR_95"], name="VaR 95%", orientation="h", marker_color=COL_PRIMARY))
+    fig.add_trace(go.Bar(y=vt_plot["processus_court"], x=vt_plot["TVaR_95"], name="TVaR 95%", orientation="h", marker_color=COL_ALERT_RED, opacity=0.75))
+    fig.update_layout(**PLOTLY_TEMPLATE["layout"], barmode="group", height=460, xaxis_title="Perte simulée")
+    st.plotly_chart(fig, width='stretch')
+
+    st.markdown("#### Contribution de chaque processus au risque global (%)")
+    fig2 = px.bar(VT.sort_values("Contribution_VaR_pct"), x="Contribution_VaR_pct", y="processus_court",
+                 orientation="h", color_discrete_sequence=[COL_SAGE])
+    fig2.update_layout(**PLOTLY_TEMPLATE["layout"], xaxis_title="Contribution VaR (%)", yaxis_title="")
+    st.plotly_chart(fig2, width='stretch')
+
+    st.markdown("---")
+    st.markdown("#### 🔁 Simulation interactive (bootstrap sur données réelles)")
+    st.caption(
+        "Rééchantillonnage (bootstrap) des criticités nettes réelles du processus sélectionné pour "
+        "illustrer la distribution des pertes simulées — méthode complémentaire à la simulation Monte Carlo du mémoire."
+    )
+    proc_sim = st.selectbox("Processus", ALL_PROCESSUS, key="mc_proc")
+    n_sim = st.slider("Nombre de simulations", 1000, 20000, 10000, step=1000)
+    conf = st.select_slider("Niveau de confiance", options=[0.90, 0.95, 0.99], value=0.95)
+
+    sample = RISQUES.loc[RISQUES["processus"] == proc_sim, "criticite_nette"].values
+    if len(sample) > 0:
+        rng = np.random.default_rng(42)
+        sims = rng.choice(sample, size=(n_sim, len(sample)), replace=True).sum(axis=1)
+        var_sim = np.quantile(sims, conf)
+        tvar_sim = sims[sims >= var_sim].mean()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Perte moyenne simulée", f"{sims.mean():.1f}")
+        c2.metric(f"VaR {int(conf*100)}%", f"{var_sim:.1f}")
+        c3.metric(f"TVaR {int(conf*100)}%", f"{tvar_sim:.1f}")
+
+        fig3 = px.histogram(sims, nbins=60, color_discrete_sequence=[COL_PRIMARY])
+        fig3.add_vline(x=var_sim, line_dash="dash", line_color=COL_ALERT_RED, annotation_text=f"VaR {int(conf*100)}%")
+        fig3.update_layout(**PLOTLY_TEMPLATE["layout"], xaxis_title="Perte simulée (criticité nette cumulée)", yaxis_title="Fréquence", showlegend=False, height=380)
+        st.plotly_chart(fig3, width='stretch')
     else:
-        top10 = pd.DataFrame({
-            "Code Risque": [f"P9.SP1.R{i}" for i in range(1, 11)],
-            "Score Normalisé": [88.7, 85.4, 82.1, 79.5, 76.2, 73.0, 70.4, 68.1, 65.0, 62.3]
-        })
-        fig_top = px.bar(
-            top10.sort_values(by='Score Normalisé', ascending=True),
-            x='Score Normalisé', y='Code Risque',
-            orientation='h', color='Score Normalisé',
-            color_continuous_scale=['#F4A261', '#E76F51', '#A31D1D'], text='Score Normalisé'
-        )
-    fig_top.update_layout(height=500, plot_bgcolor='#FFFFFF', xaxis_title="Score", yaxis_title="Risque")
-    st.plotly_chart(fig_top, use_container_width=True)
+        st.warning("Aucun risque trouvé pour ce processus.")
 
-elif menu == "📋 Suivi des Plans d'Action":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Plans d'Action</b></div>""", unsafe_allow_html=True)
-    st.markdown("## 📋 Suivi des Plans d'Action & Recommandations d'Audit")
-
-    with st.expander("➕ Ajouter une nouvelle recommandation", expanded=False):
-        with st.form("form_pa", clear_on_submit=True):
-            col1, col2 = st.columns(2)
-            with col1:
-                processus = st.selectbox("Processus concerné", list_processus if 'list_processus' in locals() else ["P9"])
-                risque = st.text_input("Risque associé (ex: R46)")
-                responsable = st.text_input("Responsable audité")
-                priorite = st.selectbox("Priorité", ["Faible", "Moyenne", "Haute", "Critique"])
-            with col2:
-                date_creation = st.date_input("Date de création", value=date.today())
-                echeance = st.date_input("Date d'échéance", min_value=date.today())
-                statut = st.selectbox("Statut initial", ["Ouvert", "En cours", "Clôturé"])
-
-            recommandation = st.text_area("Recommandation / Action corrective")
-            commentaires = st.text_area("Commentaires (optionnel)")
-
-            submitted = st.form_submit_button("Enregistrer la Recommandation")
-            if submitted:
-                if not risque or not recommandation or not responsable:
-                    st.error("Veuillez remplir les champs obligatoires.")
-                else:
-                    new_id = int(st.session_state.plan_actions["ID"].max()) + 1 if not st.session_state.plan_actions.empty else 1
-                    new_row = {
-                        "ID": new_id, "Processus": processus, "Risque associé": risque,
-                        "Recommandation": recommandation, "Responsable": responsable, "Priorité": priorite,
-                        "Date création": str(date_creation), "Échéance": str(echeance), "Statut": statut,
-                        "Date clôture": str(date.today()) if statut == "Clôturé" else "", "Commentaires": commentaires
-                    }
-                    st.session_state.plan_actions = pd.concat([st.session_state.plan_actions, pd.DataFrame([new_row])], ignore_index=True)
-                    save_persisted_data(EXCEL_ACTIONS_PATH, st.session_state.plan_actions)
-                    log_action("Auditeur Principal", "Auditeur Interne", "Ajout Plan d'Action", f"Création action #{new_id}.")
-                    st.success("Plan d'action enregistré avec succès ! ✅")
-                    st.rerun()
-
-    pa_df = st.session_state.plan_actions.copy()
-    if not pa_df.empty:
-        today_ts = pd.Timestamp(date.today())
-        pa_df["Échéance_dt"] = pd.to_datetime(pa_df["Échéance"], errors='coerce')
-        pa_df["En retard"] = (pa_df["Échéance_dt"] < today_ts) & (pa_df["Statut"] != "Clôturé")
-
-        total_actions = len(pa_df)
-        nb_cloturees = (pa_df["Statut"] == "Clôturé").sum()
-        taux_cloture = round((nb_cloturees / total_actions) * 100, 1) if total_actions > 0 else 0.0
-        nb_retard = pa_df["En retard"].sum()
-        nb_cours = (pa_df["Statut"] == "En cours").sum()
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Nombre total d'actions", total_actions)
-        k2.metric("Taux de clôture", f"{taux_cloture}%")
-        k3.metric("Actions en retard", int(nb_retard))
-        k4.metric("Actions en cours", int(nb_cours))
-
-        st.write("")
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            fig_statut = px.pie(pa_df, names="Statut", title="Répartition des actions par statut", hole=0.45)
-            fig_statut.update_layout(plot_bgcolor='#FFFFFF', height=350)
-            st.plotly_chart(fig_statut, use_container_width=True)
-        with col_g2:
-            if "Responsable" in pa_df.columns:
-                resp_df = pa_df.groupby("Responsable").size().reset_index(name="Nombre")
-                fig_resp = px.bar(resp_df, x="Responsable", y="Nombre", title="Répartition par responsable", color="Nombre", color_continuous_scale="Greens")
-                fig_resp.update_layout(plot_bgcolor='#FFFFFF', height=350)
-                st.plotly_chart(fig_resp, use_container_width=True)
-
-        st.markdown("### 🗂️ Tableau Récapitulatif des Plans d'Action")
-        
-        def highlight_retard(row):
-            if row.get("En retard", False):
-                return ['background-color: #FDECEA; color: #990000; font-weight: 600;' for _ in row]
-            return ['' for _ in row]
-
-        display_df = pa_df.drop(columns=["Échéance_dt", "En retard"], errors='ignore')
-        st.dataframe(display_df.style.apply(highlight_retard, axis=1), use_container_width=True)
-
-        st.markdown("### ✏️ Mettre à jour le statut d'une action existante")
-        col_u1, col_u2, col_u3 = st.columns(3)
-        with col_u1:
-            selected_id = st.selectbox("Sélectionner l'ID de l'action", pa_df["ID"].tolist())
-        with col_u2:
-            nouveau_statut = st.selectbox("Nouveau statut", ["Ouvert", "En cours", "Clôturé"])
-        with col_u3:
-            st.write("")
-            st.write("")
-            if st.button("Mettre à jour le Statut"):
-                idx = st.session_state.plan_actions["ID"] == selected_id
-                st.session_state.plan_actions.loc[idx, "Statut"] = nouveau_statut
-                if nouveau_statut == "Clôturé":
-                    st.session_state.plan_actions.loc[idx, "Date clôture"] = str(date.today())
-                else:
-                    st.session_state.plan_actions.loc[idx, "Date clôture"] = ""
-                
-                save_persisted_data(EXCEL_ACTIONS_PATH, st.session_state.plan_actions)
-                log_action("Auditeur Principal", "Auditeur Interne", "Mise à jour Plan d'Action", f"Action #{selected_id} passée au statut : {nouveau_statut}.")
-                st.success(f"Action #{selected_id} mise à jour avec succès ! ✅")
-                st.rerun()
-
-elif menu == "📜 Historique / Audit Trail":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Traçabilité & Historique</b></div>""", unsafe_allow_html=True)
-    st.subheader("📜 Journal des Événements & Audit Trail")
-    history_df = st.session_state.audit_history
-    if not history_df.empty:
-        search_log = st.text_input("🔍 Filtrer l'historique :", "")
-        if search_log:
-            history_df = history_df[history_df.astype(str).apply(lambda x: x.str.contains(search_log, case=False)).any(axis=1)]
-        st.dataframe(history_df, use_container_width=True, height=450)
-
-elif menu == "👥 Gestion des Accès (RBAC)":
-    st.markdown("""<div class="breadcrumb">Administration › <b>Sécurité & Rôles</b></div>""", unsafe_allow_html=True)
-    st.subheader("👥 Gestion des Utilisateurs et Rôles (RBAC)")
-    st.dataframe(st.session_state['users_db'], use_container_width=True)
-
-elif menu == "📋 Registre Détaillé":
-    st.markdown("""<div class="breadcrumb">Direction Audit › <b>Base de Données</b></div>""", unsafe_allow_html=True)
-    st.subheader("📑 Registre Complet des Risques (Filtré)")
-    if not df.empty:
-        search = st.text_input("🔍 Rechercher dans le registre :", "")
-        filtered = df[df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)] if search else df
-        st.dataframe(filtered, use_container_width=True, height=500)
-
-st.markdown("""
-    <div class="footer-dark">
-        <strong>🛡️ ORMVA-TF Risk & Audit Management Center</strong> — Plateforme Institutionnelle (2026)
-    </div>
-""", unsafe_allow_html=True)
+st.markdown("---")
+st.caption("ORMVA-TF Risk & Audit Center · Données réelles : 159 risques, 12 processus · Prototype PFE Audit Interne & Actuariat")
