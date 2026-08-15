@@ -37,13 +37,13 @@ st.set_page_config(
 
 DATA_DIR = Path(__file__).parent / "data"
 
-# Palette institutionnelle : vert forêt / vert sauge / alertes rouge-orange
-COL_PRIMARY = "#0F3D2E"       # vert forêt (identité principale)
-COL_PRIMARY_LT = "#145C3F"    # vert forêt clair
-COL_SAGE = "#7FA98C"          # vert sauge
-COL_SAGE_LT = "#DCE9DF"       # vert très clair (fonds de cards)
-COL_BG = "#F6F8F6"            # fond général
-COL_GRAY = "#3A4A45"          # gris foncé texte
+# Palette institutionnelle : bleu acier / bleu nuit professionnel (identité "froide")
+COL_PRIMARY = "#0B3554"       # bleu nuit profond (identité principale)
+COL_PRIMARY_LT = "#12557E"    # bleu acier
+COL_SAGE = "#5E8FB0"          # bleu-gris clair (accent secondaire)
+COL_SAGE_LT = "#E3EEF5"       # bleu très clair (fonds de cards)
+COL_BG = "#F4F7F9"            # fond général
+COL_GRAY = "#2E3B47"          # gris-bleu foncé texte
 COL_WHITE = "#FFFFFF"
 COL_ALERT_RED = "#C0392B"
 COL_ALERT_ORANGE = "#E08E45"
@@ -58,8 +58,8 @@ ZONE_COLORS = {
 ZONE_ORDER = ["A - Optimisation", "B - Vigilance", "C - Surveillance", "D - Traitement"]
 
 CLUSTER_COLORS = {
-    "Negliges": "#8FAE94",
-    "Mineurs": "#5B8A6B",
+    "Negliges": "#A9C6DE",
+    "Mineurs": "#3E7CA6",
     "Sous controle": "#D9A441",
     "Critiques non maitrises": "#C0392B",
 }
@@ -79,10 +79,41 @@ section[data-testid="stSidebar"] {{
     background: linear-gradient(180deg, {COL_PRIMARY} 0%, {COL_PRIMARY_LT} 100%);
 }}
 section[data-testid="stSidebar"] * {{
-    color: #EAF2EC !important;
+    color: #E7F0F7 !important;
 }}
 section[data-testid="stSidebar"] .stRadio label {{
     font-weight: 500;
+}}
+.nav-section-title {{
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #9FC3DB !important;
+    margin: 16px 0 6px 2px;
+}}
+section[data-testid="stSidebar"] button[kind="secondary"] {{
+    background: rgba(255,255,255,0.04) !important;
+    border: 1px solid rgba(255,255,255,0.10) !important;
+    color: #E7F0F7 !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    font-weight: 500 !important;
+    margin-bottom: 3px;
+}}
+section[data-testid="stSidebar"] button[kind="secondary"]:hover {{
+    background: rgba(255,255,255,0.10) !important;
+    border-color: rgba(255,255,255,0.25) !important;
+}}
+section[data-testid="stSidebar"] button[kind="primary"] {{
+    background: linear-gradient(90deg, {COL_SAGE} 0%, #7FB0CE 100%) !important;
+    border: none !important;
+    color: {COL_PRIMARY} !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    font-weight: 700 !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.20);
+    margin-bottom: 3px;
 }}
 div[data-testid="stMetric"] {{
     background: {COL_WHITE};
@@ -149,6 +180,89 @@ PLOTLY_TEMPLATE = dict(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
 )
+
+
+# ----------------------------------------------------------------------------
+# 0bis. PORTAIL D'ACCÈS — email demandé avant d'entrer, notification par mail
+# ----------------------------------------------------------------------------
+# Chaque nouvelle personne qui ouvre l'app doit indiquer son nom + email avant
+# d'accéder au contenu. Une notification est envoyée par email à l'administrateur
+# du prototype (toi) — voir README.md pour configurer les identifiants Gmail
+# (st.secrets : GMAIL_USER, GMAIL_APP_PASSWORD, NOTIF_EMAIL).
+
+if "access_granted" not in st.session_state:
+    st.session_state.access_granted = False
+if "access_log" not in st.session_state:
+    st.session_state.access_log = []
+
+
+def send_access_notification(nom: str, email: str) -> tuple[bool, str]:
+    """Envoie un email à l'administrateur pour signaler un nouvel accès à l'app.
+    Retourne (succès, message d'erreur éventuel). Ne bloque jamais l'app en cas d'échec."""
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+
+        gmail_user = st.secrets["GMAIL_USER"]
+        gmail_app_password = st.secrets["GMAIL_APP_PASSWORD"]
+        notif_to = st.secrets.get("NOTIF_EMAIL", gmail_user)
+
+        body = (
+            f"Nouvel accès à ORMVA-TF Risk & Audit Center\n\n"
+            f"Nom : {nom}\nEmail : {email}\n"
+            f"Date : {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        msg = MIMEText(body)
+        msg["Subject"] = "🔔 Nouvel accès — ORMVA-TF Risk & Audit Center"
+        msg["From"] = gmail_user
+        msg["To"] = notif_to
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
+            server.login(gmail_user, gmail_app_password)
+            server.sendmail(gmail_user, [notif_to], msg.as_string())
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+if not st.session_state.access_granted:
+    st.markdown(
+        f"""<div style="max-width:480px;margin:60px auto 0 auto;text-align:center;">
+        <div style="font-size:40px;">🛡️</div>
+        <h2 style="color:{COL_PRIMARY};margin-bottom:0;">ORMVA-TF Risk & Audit Center</h2>
+        <p style="color:{COL_GRAY};">Plateforme décisionnelle d'audit interne et de gestion des risques</p>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    _, mid, _ = st.columns([1, 1.3, 1])
+    with mid:
+        with st.form("gate_form"):
+            g_nom = st.text_input("Nom complet")
+            g_email = st.text_input("Adresse Gmail")
+            go = st.form_submit_button("🔓 Accéder à l'application", width='stretch')
+            if go:
+                if not g_nom.strip() or "@gmail.com" not in g_email.lower():
+                    st.error("Merci de renseigner ton nom et une adresse Gmail valide.")
+                else:
+                    entry = {
+                        "nom": g_nom.strip(), "email": g_email.strip(),
+                        "date": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+                    }
+                    st.session_state.access_log.append(entry)
+                    st.session_state.current_user_name = entry["nom"]
+                    st.session_state.current_user_email = entry["email"]
+                    ok, err = send_access_notification(entry["nom"], entry["email"])
+                    st.session_state.access_granted = True
+                    if not ok:
+                        st.session_state.access_notif_warning = (
+                            "ℹ️ Accès autorisé, mais la notification email n'a pas pu être envoyée "
+                            "(configuration Gmail manquante — voir README.md)."
+                        )
+                    st.rerun()
+    st.stop()
+
+if st.session_state.get("access_notif_warning"):
+    st.toast(st.session_state.pop("access_notif_warning"), icon="ℹ️")
 
 
 # ----------------------------------------------------------------------------
@@ -260,6 +374,34 @@ if "rejected_session_risks" not in st.session_state:
     st.session_state.rejected_session_risks = []
 if "missions_plan" not in st.session_state:
     st.session_state.missions_plan = []
+if "model_weights" not in st.session_state:
+    st.session_state.model_weights = {"crit": 40, "var": 40, "critiques": 20}
+if "model_versions" not in st.session_state:
+    st.session_state.model_versions = [{
+        "version": "V1.0", "date": "20/12/2024", "auteur": "Modèle initial (mémoire PFE)",
+        "poids": {"crit": 40, "var": 40, "critiques": 20},
+        "motif": "Version de référence — validée par corrélation de Spearman (ρ = 0.98).",
+    }]
+ROLES_MODEL = {"Auditeur interne", "Chef d'audit / Responsable Audit", "Administrateur"}
+
+# Navigation groupée par logique de workflow (comme une vraie appli SaaS d'entreprise)
+NAV_SECTIONS = {
+    "PILOTAGE": ["🏠 Dashboard"],
+    "CARTOGRAPHIE & DÉCLARATION": [
+        "⚠️ Cartographie des risques", "📝 Déclarer un risque", "🔔 Validation des risques",
+    ],
+    "ANALYSE DES RISQUES": [
+        "🧭 Matrice des risques (zones)", "🗂️ Matrice de contrôle (4×4)",
+        "📊 Analyses statistiques", "🎲 Monte Carlo · VaR / TVaR",
+    ],
+    "AUDIT & PLANIFICATION": ["🎯 Priorisation de l'audit", "📅 Planification annuelle"],
+    "PILOTAGE & ADMINISTRATION": [
+        "📈 Indicateurs KPI / KPR", "⚙️ Paramètres du modèle", "👥 Gestion des accès",
+    ],
+    "INFORMATIONS": ["ℹ️ À propos du projet"],
+}
+if "page" not in st.session_state:
+    st.session_state.page = "🏠 Dashboard"
 
 
 # ----------------------------------------------------------------------------
@@ -276,25 +418,18 @@ with st.sidebar:
     )
     st.markdown("---")
 
-    page = st.radio(
-        "Navigation",
-        [
-            "🏠 Dashboard",
-            "⚠️ Cartographie des risques",
-            "📝 Déclarer un risque",
-            "🔔 Validation des risques",
-            "🧭 Matrice des risques (zones)",
-            "🗂️ Matrice de contrôle (4×4)",
-            "🎯 Priorisation de l'audit",
-            "📅 Planification annuelle",
-            "📊 Analyses statistiques",
-            "🎲 Monte Carlo · VaR / TVaR",
-            "📈 Indicateurs KPI / KPR",
-            "👥 Gestion des accès",
-            "ℹ️ À propos du projet",
-        ],
-        label_visibility="collapsed",
-    )
+    for section_title, items in NAV_SECTIONS.items():
+        st.markdown(f'<div class="nav-section-title">{section_title}</div>', unsafe_allow_html=True)
+        for item in items:
+            is_active = st.session_state.page == item
+            if st.button(
+                item, key=f"nav_btn_{item}", width='stretch',
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state.page = item
+                st.rerun()
+
+    page = st.session_state.page
 
     st.markdown("---")
     st.markdown("**Filtrage par processus**")
@@ -309,6 +444,7 @@ with st.sidebar:
         selected_processus = ALL_PROCESSUS
 
     st.markdown("---")
+    st.caption(f"👤 {st.session_state.get('current_user_name', '—')} · {st.session_state.get('current_user_email', '')}")
     st.caption(f"159 risques réels · 12 processus")
     st.caption("Source : cartographie ORMVA-TF (20-12-2024, V2 GCA)")
 
@@ -1105,11 +1241,125 @@ elif page == "📈 Indicateurs KPI / KPR":
 
 
 # ----------------------------------------------------------------------------
+# PAGE 7bis — PARAMÈTRES DU MODÈLE (pondération du score, versioning)
+# ----------------------------------------------------------------------------
+
+elif page == "⚙️ Paramètres du modèle":
+    header("Paramètres du modèle de scoring", "Ajuster la pondération du score de priorisation — sans toucher au code source")
+
+    if st.session_state.current_role not in ROLES_MODEL:
+        st.warning(
+            f"🔒 Accès réservé aux rôles **{', '.join(ROLES_MODEL)}**. "
+            f"Vous êtes actuellement connecté en tant que **{st.session_state.current_role}**."
+        )
+    else:
+        st.info(
+            "L'auditeur peut ajuster ici le **poids de chaque facteur** du score de priorisation. "
+            "La formule et le code de calcul restent fixes dans le dépôt Git — seules les "
+            "**valeurs de pondération** sont modifiables, avec historique complet des versions."
+        )
+
+        w = st.session_state.model_weights
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            w_crit = st.slider("Criticité nette (%)", 0, 100, w["crit"])
+        with c2:
+            w_var = st.slider("VaR 95% (%)", 0, 100, w["var"])
+        with c3:
+            w_critiques = st.slider("Nb risques critiques (%)", 0, 100, w["critiques"])
+
+        total = w_crit + w_var + w_critiques
+        if total == 0:
+            st.error("La somme des poids ne peut pas être nulle.")
+            st.stop()
+        st.caption(f"Somme actuelle : {total}% → normalisée automatiquement à 100% dans le calcul.")
+        w_crit_n, w_var_n, w_critiques_n = w_crit / total, w_var / total, w_critiques / total
+
+        # Recalcul du score en direct (normalisation min-max, méthode identique au mémoire)
+        base = SCORE_PRIO.copy()
+        for col, key in [("Criticite_Nette_Somme", "crit_n"), ("VaR_95", "var_n"), ("Nb_Risques_Critiques", "critiques_n")]:
+            mn, mx = base[col].min(), base[col].max()
+            base[key] = (base[col] - mn) / (mx - mn) * 100 if mx > mn else 0
+
+        base["Score_recalcule"] = (
+            w_crit_n * base["crit_n"] + w_var_n * base["var_n"] + w_critiques_n * base["critiques_n"]
+        )
+        base["Rang_recalcule"] = base["Score_recalcule"].rank(ascending=False).astype(int)
+
+        st.markdown("#### Comparaison — score officiel (mémoire) vs score recalculé (poids actuels)")
+        comp = base[["Processus", "Score_Priorite_Audit", "Score_recalcule", "Rang_Quantifie", "Rang_recalcule"]].sort_values("Score_recalcule", ascending=False)
+        st.dataframe(
+            comp.rename(columns={
+                "Score_Priorite_Audit": "Score officiel", "Score_recalcule": "Score recalculé",
+                "Rang_Quantifie": "Rang officiel", "Rang_recalcule": "Rang recalculé",
+            }).round(1), width='stretch', hide_index=True,
+        )
+
+        fig = go.Figure()
+        comp_sorted = comp.sort_values("Score_recalcule")
+        fig.add_trace(go.Bar(y=comp_sorted["Processus"], x=comp_sorted["Score_Priorite_Audit"], name="Score officiel", orientation="h", marker_color=COL_SAGE))
+        fig.add_trace(go.Bar(y=comp_sorted["Processus"], x=comp_sorted["Score_recalcule"], name="Score recalculé", orientation="h", marker_color=COL_PRIMARY))
+        fig.update_layout(**PLOTLY_TEMPLATE["layout"], barmode="group", height=440)
+        st.plotly_chart(fig, width='stretch')
+
+        st.markdown("---")
+        st.markdown("#### 💾 Enregistrer comme nouvelle version du modèle")
+        with st.form("form_model_version"):
+            motif = st.text_area("Motif du changement (obligatoire)")
+            if st.form_submit_button("Créer une nouvelle version"):
+                if not motif:
+                    st.error("Merci de préciser le motif du changement.")
+                else:
+                    n = len(st.session_state.model_versions)
+                    new_version = f"V1.{n}"
+                    st.session_state.model_versions.append({
+                        "version": new_version,
+                        "date": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+                        "auteur": st.session_state.current_role,
+                        "poids": {"crit": w_crit, "var": w_var, "critiques": w_critiques},
+                        "motif": motif,
+                    })
+                    st.session_state.model_weights = {"crit": w_crit, "var": w_var, "critiques": w_critiques}
+                    st.success(f"Nouvelle version {new_version} enregistrée.")
+                    st.rerun()
+
+        st.markdown("#### 🕓 Historique des versions du modèle")
+        for v in reversed(st.session_state.model_versions):
+            with st.container(border=True):
+                cA, cB = st.columns([3, 1])
+                cA.markdown(f"**{v['version']}** · {v['date']} · par {v['auteur']}")
+                cA.caption(v["motif"])
+                cA.caption(f"Poids : Criticité {v['poids']['crit']}% · VaR {v['poids']['var']}% · Risques critiques {v['poids']['critiques']}%")
+                if cB.button("↺ Restaurer cette version", key=f"restore_{v['version']}", width='stretch'):
+                    st.session_state.model_weights = dict(v["poids"])
+                    st.success(f"Poids de {v['version']} restaurés.")
+                    st.rerun()
+
+    st.caption(
+        "⚠️ Le code de calcul (formule, méthodologie ANOVA/Monte Carlo) reste dans le dépôt Git — "
+        "seuls les poids du score sont paramétrables ici, conformément au cahier des charges initial."
+    )
+
+
+# ----------------------------------------------------------------------------
 # PAGE 8 — GESTION DES ACCÈS (RBAC)
 # ----------------------------------------------------------------------------
 
 elif page == "👥 Gestion des accès":
     header("Gestion des accès", "Attribution des rôles — réservé à l'Auditeur interne / Administrateur")
+
+    st.markdown("#### 🔑 Journal des connexions (portail d'accès)")
+    if st.session_state.access_log:
+        st.dataframe(pd.DataFrame(st.session_state.access_log), width='stretch', hide_index=True)
+    else:
+        st.info("Aucune connexion enregistrée dans cette session.")
+    st.caption(
+        "⚠️ Ce journal n'affiche que les connexions de **ta propre session** navigateur "
+        "(limite technique de Streamlit sans base de données). La **notification email** envoyée "
+        "à chaque accès (voir README.md) reste le moyen fiable de savoir qui a ouvert l'app, "
+        "tous utilisateurs confondus."
+    )
+    st.markdown("---")
 
     if st.session_state.current_role not in ROLES_GERENT_ACCES:
         st.warning(
