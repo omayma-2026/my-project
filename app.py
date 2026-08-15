@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+""" 
 ORMVA-TF Risk & Audit Center
 Plateforme décisionnelle d'audit interne et de gestion des risques
 ------------------------------------------------------------------
