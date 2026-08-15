@@ -81,8 +81,11 @@ section[data-testid="stSidebar"] {{
 section[data-testid="stSidebar"] * {{
     color: #E7F0F7 !important;
 }}
-section[data-testid="stSidebar"] .stRadio label {{
-    font-weight: 500;
+section[data-testid="stSidebar"] div[data-baseweb="select"] * {{
+    color: {COL_GRAY} !important;
+}}
+section[data-testid="stSidebar"] div[data-baseweb="select"] > div {{
+    background-color: white !important;
 }}
 .nav-section-title {{
     font-size: 11px;
