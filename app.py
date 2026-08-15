@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-""" 
+"""
 ORMVA-TF Risk & Audit Center
 Plateforme décisionnelle d'audit interne et de gestion des risques
 ------------------------------------------------------------------
@@ -16,7 +16,7 @@ Lancer avec :
     streamlit run app.py
 """
 
-import numpy as np 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -225,12 +225,55 @@ PROC_LABELS = {p: p for p in ALL_PROCESSUS}
 
 
 # ----------------------------------------------------------------------------
-# 2. SIDEBAR — NAVIGATION + FILTRE GLOBAL PAR PROCESSUS
+# 1bis. RBAC — RÔLES SIMULÉS + ÉTAT DE SESSION (démo, sans backend réel)
+# ----------------------------------------------------------------------------
+# NB : Streamlit seul n'a pas de base de données ni d'authentification réelle.
+# Ce bloc simule le RBAC (rôles, accès, workflow de validation) en mémoire de
+# session, pour la démonstration. Dans la version finale (FastAPI + PostgreSQL),
+# ceci correspond aux tables `users`, `roles`, `permissions`, `risk_validations`.
+
+ROLES = [
+    "Collaborateur",
+    "Responsable de service",
+    "Auditeur interne",
+    "Chef d'audit / Responsable Audit",
+    "Directeur",
+    "Administrateur",
+]
+ROLES_PEUVENT_VALIDER = {"Auditeur interne", "Chef d'audit / Responsable Audit", "Administrateur"}
+ROLES_GERENT_ACCES = {"Auditeur interne", "Administrateur"}
+
+if "current_role" not in st.session_state:
+    st.session_state.current_role = "Auditeur interne"
+if "users_directory" not in st.session_state:
+    st.session_state.users_directory = pd.DataFrame([
+        {"Nom": "Auditeur Interne (vous)", "Email": "auditeur.interne@ormvatf.ma", "Rôle": "Auditeur interne", "Accès": "Actif"},
+        {"Nom": "Chef d'Audit", "Email": "chef.audit@ormvatf.ma", "Rôle": "Chef d'audit / Responsable Audit", "Accès": "En attente"},
+        {"Nom": "Directeur Général", "Email": "directeur@ormvatf.ma", "Rôle": "Directeur", "Accès": "En attente"},
+        {"Nom": "Resp. Achat & Approvisionnement", "Email": "resp.p9@ormvatf.ma", "Rôle": "Responsable de service", "Accès": "En attente"},
+    ])
+if "pending_risks" not in st.session_state:
+    st.session_state.pending_risks = []       # risques déclarés, en attente de validation
+if "validated_session_risks" not in st.session_state:
+    st.session_state.validated_session_risks = []   # risques validés durant la session
+if "rejected_session_risks" not in st.session_state:
+    st.session_state.rejected_session_risks = []
+if "missions_plan" not in st.session_state:
+    st.session_state.missions_plan = []
+
+
+# ----------------------------------------------------------------------------
+# 2. SIDEBAR — NAVIGATION + RÔLE + FILTRE GLOBAL PAR PROCESSUS
 # ----------------------------------------------------------------------------
 
 with st.sidebar:
     st.markdown("### 🛡️ ORMVA-TF")
     st.caption("Risk & Audit Center")
+
+    st.session_state.current_role = st.selectbox(
+        "Connecté en tant que", ROLES,
+        index=ROLES.index(st.session_state.current_role),
+    )
     st.markdown("---")
 
     page = st.radio(
@@ -238,10 +281,17 @@ with st.sidebar:
         [
             "🏠 Dashboard",
             "⚠️ Cartographie des risques",
+            "📝 Déclarer un risque",
+            "🔔 Validation des risques",
             "🧭 Matrice des risques (zones)",
+            "🗂️ Matrice de contrôle (4×4)",
             "🎯 Priorisation de l'audit",
+            "📅 Planification annuelle",
             "📊 Analyses statistiques",
             "🎲 Monte Carlo · VaR / TVaR",
+            "📈 Indicateurs KPI / KPR",
+            "👥 Gestion des accès",
+            "ℹ️ À propos du projet",
         ],
         label_visibility="collapsed",
     )
@@ -395,6 +445,12 @@ if page == "🏠 Dashboard":
 elif page == "⚠️ Cartographie des risques":
     header("Cartographie des risques", f"{len(R)} risques affichés (sur {len(RISQUES)} au total)")
 
+    if st.session_state.validated_session_risks:
+        st.success(
+            f"🆕 {len(st.session_state.validated_session_risks)} risque(s) validé(s) durant cette "
+            "session sont inclus ci-dessous (badge « Nouveau (session) »)."
+        )
+
     fc1, fc2, fc3, fc4 = st.columns(4)
     with fc1:
         zones_f = st.multiselect("Zone", ZONE_ORDER, default=ZONE_ORDER)
@@ -424,13 +480,179 @@ elif page == "⚠️ Cartographie des risques":
         "criticite_brute": "Crit. brute", "dmr": "DMR", "criticite_nette": "Crit. nette",
         "zone": "Zone", "cluster_label": "Profil (cluster)",
     }
-    st.dataframe(
-        filt[list(show_cols)].rename(columns=show_cols).sort_values("Crit. nette", ascending=False),
-        width='stretch', hide_index=True, height=460,
-    )
+    display_df = filt[list(show_cols)].rename(columns=show_cols).sort_values("Crit. nette", ascending=False)
+    display_df.insert(0, "Statut", "Officiel")
+
+    if st.session_state.validated_session_risks:
+        new_rows = pd.DataFrame(st.session_state.validated_session_risks)
+        new_rows = new_rows[new_rows["processus"].isin(selected_processus)]
+        if len(new_rows):
+            new_display = pd.DataFrame({
+                "Statut": "🆕 Nouveau (session)",
+                "Code": new_rows["code"], "Processus": new_rows["processus"].str.extract(r"(P\d+)")[0],
+                "Sous-processus": new_rows["sous_processus"], "Intitulé": new_rows["intitule"],
+                "Prob.": new_rows["prob"], "Grav.": new_rows["grav"],
+                "Crit. brute": new_rows["criticite_brute"], "DMR": new_rows["dmr"],
+                "Crit. nette": new_rows["criticite_nette"], "Zone": "—", "Profil (cluster)": "—",
+            })
+            display_df = pd.concat([new_display, display_df], ignore_index=True)
+
+    st.dataframe(display_df, width='stretch', hide_index=True, height=460)
 
     csv = filt.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Export CSV/Excel-compatible", csv, "cartographie_risques_export.csv", "text/csv")
+
+
+# ----------------------------------------------------------------------------
+# PAGE 2bis — DÉCLARER UN RISQUE (workflow : brouillon -> en attente de validation)
+# ----------------------------------------------------------------------------
+
+elif page == "📝 Déclarer un risque":
+    header("Déclarer un nouveau risque", "Un risque déclaré n'intègre PAS la cartographie officielle tant qu'il n'est pas validé par l'auditeur interne")
+
+    st.info(
+        "🔒 **Règle du workflow** : ce formulaire crée un risque avec le statut "
+        "**« En attente de validation »**. Il n'apparaîtra dans la cartographie officielle "
+        "qu'après validation par un Auditeur interne / Chef d'audit (page *Validation des risques*)."
+    )
+
+    with st.form("form_declaration", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            f_processus = st.selectbox("Processus *", ALL_PROCESSUS)
+            f_sous_processus = st.text_input("Sous-processus *")
+            f_titre = st.text_input("Titre du risque *")
+            f_responsable = st.text_input("Responsable du risque")
+        with c2:
+            f_prob = st.slider("Probabilité (1-4)", 1, 4, 2)
+            f_grav = st.slider("Gravité (1-4)", 1, 4, 2)
+            f_dmr = st.select_slider("DMR estimé (résiduel)", options=[0.25, 0.5, 0.75, 1.0], value=0.5)
+            f_declarant = st.text_input("Déclaré par (nom)", value=st.session_state.current_role)
+
+        f_description = st.text_area("Description du risque")
+        f_causes = st.text_area("Causes")
+        f_consequences = st.text_area("Conséquences")
+        f_mesures = st.text_area("Mesures de contrôle existantes")
+        f_commentaire = st.text_area("Commentaire additionnel")
+        f_piece = st.file_uploader("Pièce justificative (optionnel)")
+
+        submitted = st.form_submit_button("📤 Soumettre pour validation", width='stretch')
+        if submitted:
+            if not f_titre or not f_sous_processus:
+                st.error("Merci de renseigner au moins le titre et le sous-processus.")
+            else:
+                crit_brute = f_prob * f_grav
+                new_risk = {
+                    "code": f"NEW-{len(st.session_state.pending_risks) + len(st.session_state.validated_session_risks) + 1:03d}",
+                    "processus": f_processus,
+                    "sous_processus": f_sous_processus,
+                    "intitule": f_titre,
+                    "description": f_description,
+                    "causes": f_causes,
+                    "consequences": f_consequences,
+                    "mesures": f_mesures,
+                    "prob": f_prob, "grav": f_grav,
+                    "criticite_brute": crit_brute,
+                    "dmr": f_dmr,
+                    "criticite_nette": round(crit_brute * f_dmr, 2),
+                    "responsable": f_responsable,
+                    "declarant": f_declarant,
+                    "commentaire": f_commentaire,
+                    "piece_jointe": f_piece.name if f_piece else "—",
+                    "date_declaration": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+                    "statut": "En attente de validation",
+                }
+                st.session_state.pending_risks.append(new_risk)
+                st.success(f"✅ Risque « {f_titre} » soumis avec succès (code {new_risk['code']}). Statut : En attente de validation.")
+
+    if st.session_state.pending_risks:
+        st.markdown("#### Mes déclarations en cours")
+        df_pending = pd.DataFrame(st.session_state.pending_risks)
+        st.dataframe(
+            df_pending[["code", "processus", "intitule", "criticite_nette", "date_declaration", "statut"]],
+            width='stretch', hide_index=True,
+        )
+
+
+# ----------------------------------------------------------------------------
+# PAGE 2ter — VALIDATION DES RISQUES (réservée Auditeur / Chef d'audit / Admin)
+# ----------------------------------------------------------------------------
+
+elif page == "🔔 Validation des risques":
+    header("Validation des risques déclarés", "Vérification → Validation / Rejet / Demande de modification")
+
+    if st.session_state.current_role not in ROLES_PEUVENT_VALIDER:
+        st.warning(
+            f"🔒 Accès réservé aux rôles **{', '.join(ROLES_PEUVENT_VALIDER)}**. "
+            f"Vous êtes actuellement connecté en tant que **{st.session_state.current_role}**. "
+            "Changez de rôle dans la sidebar pour accéder à la validation."
+        )
+    else:
+        tab_a, tab_b, tab_c = st.tabs([
+            f"🟡 À vérifier ({len(st.session_state.pending_risks)})",
+            f"🟢 Validés session ({len(st.session_state.validated_session_risks)})",
+            f"🔴 Rejetés session ({len(st.session_state.rejected_session_risks)})",
+        ])
+
+        with tab_a:
+            if not st.session_state.pending_risks:
+                st.info("Aucun risque en attente de validation.")
+            for i, risk in enumerate(list(st.session_state.pending_risks)):
+                with st.container(border=True):
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.markdown(f"**{risk['code']} · {risk['intitule']}**")
+                        st.caption(f"{risk['processus']} · {risk['sous_processus']} · déclaré par {risk['declarant']} le {risk['date_declaration']}")
+                        st.write(risk.get("description", "—"))
+                        st.caption(f"Criticité brute {risk['criticite_brute']} · DMR {risk['dmr']} · Criticité nette {risk['criticite_nette']}")
+                    with c2:
+                        st.metric("Criticité nette", risk["criticite_nette"])
+                    commentaire = st.text_input("Commentaire de l'auditeur", key=f"com_{i}")
+                    b1, b2, b3 = st.columns(3)
+                    if b1.button("✅ Valider", key=f"val_{i}", width='stretch'):
+                        risk["statut"] = "Validé"
+                        risk["commentaire_auditeur"] = commentaire
+                        risk["valide_par"] = st.session_state.current_role
+                        st.session_state.validated_session_risks.append(risk)
+                        st.session_state.pending_risks.remove(risk)
+                        st.rerun()
+                    if b2.button("✏️ Demander modification", key=f"mod_{i}", width='stretch'):
+                        risk["statut"] = "Modification demandée"
+                        risk["commentaire_auditeur"] = commentaire
+                        st.info("Le déclarant devra corriger et resoumettre le risque.")
+                    if b3.button("❌ Rejeter", key=f"rej_{i}", width='stretch'):
+                        risk["statut"] = "Rejeté"
+                        risk["commentaire_auditeur"] = commentaire
+                        risk["rejete_par"] = st.session_state.current_role
+                        st.session_state.rejected_session_risks.append(risk)
+                        st.session_state.pending_risks.remove(risk)
+                        st.rerun()
+
+        with tab_b:
+            if st.session_state.validated_session_risks:
+                st.dataframe(pd.DataFrame(st.session_state.validated_session_risks)[
+                    ["code", "processus", "intitule", "criticite_nette", "valide_par", "date_declaration"]
+                ], width='stretch', hide_index=True)
+                st.success(
+                    "Ces risques sont désormais considérés comme **actifs** et apparaissent "
+                    "avec le badge « Nouveau (session) » dans la Cartographie des risques."
+                )
+            else:
+                st.info("Aucun risque validé durant cette session.")
+
+        with tab_c:
+            if st.session_state.rejected_session_risks:
+                st.dataframe(pd.DataFrame(st.session_state.rejected_session_risks)[
+                    ["code", "processus", "intitule", "commentaire_auditeur"]
+                ], width='stretch', hide_index=True)
+            else:
+                st.info("Aucun risque rejeté durant cette session.")
+
+    st.caption(
+        "⚠️ Démo pédagogique : ces risques déclarés/validés sont stockés en mémoire de session "
+        "(ils disparaissent si l'app redémarre). Dans la version finale, ceci est persisté dans "
+        "PostgreSQL (`risques`, `risk_validations`, `risk_history`)."
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -506,6 +728,79 @@ elif page == "🧭 Matrice des risques (zones)":
 
 
 # ----------------------------------------------------------------------------
+# PAGE 3bis — MATRICE DE CONTRÔLE 4×4 (Degré de contrôle × Degré de criticité)
+# ----------------------------------------------------------------------------
+
+elif page == "🗂️ Matrice de contrôle (4×4)":
+    header(
+        "Matrice des actions liées aux risques majeurs",
+        "Degré de contrôle × Degré de criticité — 16 cases, mêmes zones A/B/C/D",
+    )
+
+    # Degré de contrôle = (1 - DMR) x 100%  →  4 tranches réelles observées dans les données
+    controle_bins = [-0.01, 0.25, 0.50, 0.75, 1.01]
+    controle_labels = ["Faible ≤25%", "Partiel ≤50%", "Correct ≤75%", "Satisfaisant ≤100%"]
+    crit_bins = [0, 4, 8, 12, 16]
+    crit_labels = ["Faible [0-4]", "Moyen [4-8]", "Significatif [8-12]", "Élevé [12-16]"]
+
+    Rm = R.copy()
+    Rm["degre_controle_pct"] = (1 - Rm["dmr"]) * 100
+    Rm["ligne_controle"] = pd.cut(Rm["degre_controle_pct"], bins=controle_bins, labels=controle_labels)
+    Rm["colonne_criticite"] = pd.cut(Rm["criticite_brute"], bins=crit_bins, labels=crit_labels, include_lowest=True)
+
+    def cell_zone(ligne, colonne):
+        li = controle_labels.index(ligne)   # 0=Faible ... 3=Satisfaisant
+        ci = crit_labels.index(colonne)     # 0=Faible ... 3=Élevé
+        controle_insuffisant = li < 2
+        crit_elevee = ci >= 2
+        if crit_elevee and controle_insuffisant:
+            return "D - Traitement"
+        if crit_elevee and not controle_insuffisant:
+            return "C - Surveillance"
+        if not crit_elevee and controle_insuffisant:
+            return "B - Vigilance"
+        return "A - Optimisation"
+
+    # Construction de la grille 4x4 avec les codes de risques réels par case
+    grid_z = []
+    grid_text = []
+    for li_label in reversed(controle_labels):  # Satisfaisant en haut, Faible en bas (comme un repère cartésien)
+        row_z, row_text = [], []
+        for ci_label in crit_labels:
+            zone = cell_zone(li_label, ci_label)
+            row_z.append(ZONE_ORDER.index(zone))
+            codes = Rm.loc[(Rm["ligne_controle"] == li_label) & (Rm["colonne_criticite"] == ci_label), "code"].tolist()
+            label = "<br>".join(codes[:6]) + (f"<br>+{len(codes)-6}" if len(codes) > 6 else "")
+            row_text.append(label if codes else "")
+        grid_z.append(row_z)
+        grid_text.append(row_text)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=grid_z, text=grid_text, texttemplate="%{text}", textfont=dict(size=11, color="white"),
+        x=crit_labels, y=list(reversed(controle_labels)),
+        colorscale=[[0, ZONE_COLORS["A - Optimisation"]], [0.33, ZONE_COLORS["B - Vigilance"]],
+                    [0.66, ZONE_COLORS["C - Surveillance"]], [1, ZONE_COLORS["D - Traitement"]]],
+        showscale=False, xgap=3, ygap=3,
+    ))
+    fig.update_layout(
+        **PLOTLY_TEMPLATE["layout"], height=520,
+        xaxis_title="DEGRÉ DE CRITICITÉ →", yaxis_title="DEGRÉ DE CONTRÔLE →",
+        xaxis=dict(side="bottom"),
+    )
+    st.plotly_chart(fig, width='stretch')
+
+    leg1, leg2, leg3, leg4 = st.columns(4)
+    for col, (z, c) in zip([leg1, leg2, leg3, leg4], ZONE_COLORS.items()):
+        col.markdown(f'<span class="badge" style="background:{c}">{z}</span>', unsafe_allow_html=True)
+
+    st.caption(
+        "Degré de contrôle = (1 − DMR) × 100 — plus il est élevé, plus le dispositif de maîtrise "
+        "est efficace. Degré de criticité = criticité brute (Probabilité × Gravité). "
+        "Cases vides = aucun risque réel dans cette combinaison sur le filtre courant."
+    )
+
+
+# ----------------------------------------------------------------------------
 # PAGE 4 — PRIORISATION DE L'AUDIT
 # ----------------------------------------------------------------------------
 
@@ -553,6 +848,66 @@ elif page == "🎯 Priorisation de l'audit":
         f"Corrélation de Spearman entre le classement existant ORMVA-TF et le score quantifié : "
         f"**ρ = {rho:.2f}** (p = {pval:.4f}) — cohérence forte entre les deux approches."
     )
+
+
+# ----------------------------------------------------------------------------
+# PAGE 4bis — PLANIFICATION ANNUELLE D'AUDIT
+# ----------------------------------------------------------------------------
+
+elif page == "📅 Planification annuelle":
+    header("Planification annuelle de la mission d'audit", "Plan d'audit basé sur le score de priorisation (approche par les risques)")
+
+    c1, c2 = st.columns(2)
+    annee = c1.selectbox("Année du plan d'audit", [2026, 2027], index=0)
+    nb_missions = c2.slider("Nombre de processus à auditer cette année", 1, 12, 6)
+
+    plan = SCORE_PRIO.sort_values("Rang_Quantifie").head(nb_missions).copy()
+    quarters = ["T1", "T2", "T3", "T4"]
+    plan["Trimestre proposé"] = [quarters[i % 4] for i in range(len(plan))]
+    plan["Niveau de priorité"] = pd.cut(plan["Score_Priorite_Audit"], bins=[-1, 30, 60, 100], labels=["Faible", "Moyenne", "Élevée"])
+
+    st.markdown(f"#### Plan d'audit proposé {annee} — {nb_missions} processus")
+    st.caption("Les processus les mieux classés (score de priorisation) sont planifiés en premier (T1).")
+    st.dataframe(
+        plan[["Rang_Quantifie", "Processus", "Score_Priorite_Audit", "Niveau de priorité", "Nb_Risques_Critiques", "Trimestre proposé"]]
+        .rename(columns={"Rang_Quantifie": "Rang", "Score_Priorite_Audit": "Score", "Nb_Risques_Critiques": "Risques critiques"}),
+        width='stretch', hide_index=True,
+    )
+
+    st.markdown("#### Vue calendrier (Gantt simplifié)")
+    q_start = {"T1": f"{annee}-01-01", "T2": f"{annee}-04-01", "T3": f"{annee}-07-01", "T4": f"{annee}-10-01"}
+    q_end = {"T1": f"{annee}-03-31", "T2": f"{annee}-06-30", "T3": f"{annee}-09-30", "T4": f"{annee}-12-31"}
+    gantt_df = pd.DataFrame({
+        "Processus": plan["Processus"],
+        "Début": pd.to_datetime(plan["Trimestre proposé"].map(q_start)),
+        "Fin": pd.to_datetime(plan["Trimestre proposé"].map(q_end)),
+        "Score": plan["Score_Priorite_Audit"],
+    })
+    fig = px.timeline(gantt_df, x_start="Début", x_end="Fin", y="Processus", color="Score",
+                      color_continuous_scale=[COL_SAGE_LT, COL_ALERT_RED])
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(**PLOTLY_TEMPLATE["layout"], height=420, coloraxis_showscale=False)
+    st.plotly_chart(fig, width='stretch')
+
+    st.markdown("---")
+    st.markdown("#### ➕ Ajouter / ajuster une mission au plan")
+    with st.form("form_mission"):
+        m1, m2, m3 = st.columns(3)
+        m_proc = m1.selectbox("Processus", ALL_PROCESSUS, key="mission_proc")
+        m_trim = m2.selectbox("Trimestre", quarters)
+        m_auditeur = m3.text_input("Auditeur responsable")
+        m_objectif = st.text_area("Objectif de la mission")
+        if st.form_submit_button("Ajouter au plan"):
+            st.session_state.missions_plan.append({
+                "Année": annee, "Processus": m_proc, "Trimestre": m_trim,
+                "Auditeur responsable": m_auditeur or "Non assigné",
+                "Objectif": m_objectif, "Statut": "À planifier",
+            })
+            st.success(f"Mission ajoutée pour {m_proc} ({m_trim} {annee}).")
+
+    if st.session_state.missions_plan:
+        st.markdown("#### Missions ajoutées manuellement")
+        st.dataframe(pd.DataFrame(st.session_state.missions_plan), width='stretch', hide_index=True)
 
 
 # ----------------------------------------------------------------------------
@@ -704,5 +1059,154 @@ elif page == "🎲 Monte Carlo · VaR / TVaR":
     else:
         st.warning("Aucun risque trouvé pour ce processus.")
 
+
+# ----------------------------------------------------------------------------
+# PAGE 7 — INDICATEURS KPI / KPR
+# ----------------------------------------------------------------------------
+
+elif page == "📈 Indicateurs KPI / KPR":
+    header("Indicateurs KPI / KPR", "Indicateurs Clés de Risque (données réelles) et de Performance de l'audit (démo session)")
+
+    st.markdown("### 🧭 KPR — Indicateurs Clés de Risque (calculés sur données réelles)")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("VaR globale 95%", "4 816.7")
+    k2.metric("DMR moyen (résiduel)", f"{R['dmr'].mean():.2f}")
+    pct_zone_d = (R["zone"] == "D - Traitement").mean() * 100
+    k3.metric("% risques en zone D (Traitement)", f"{pct_zone_d:.1f}%")
+    k4.metric("Risques critiques (Nb_Risques_Critiques)", int(SC["Nb_Risques_Critiques"].sum()))
+
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Criticité nette moyenne", f"{R['criticite_nette'].mean():.2f}")
+    k6.metric("Score de priorité max", f"{SC['Score_Priorite_Audit'].max():.1f}")
+    k7.metric("Corrélation Spearman (validation modèle)", "0.98")
+    k8.metric("Processus couverts (filtre)", f"{R['processus'].nunique()} / {len(ALL_PROCESSUS)}")
+
+    fig = px.bar(SC.sort_values("Score_Priorite_Audit"), x="Score_Priorite_Audit", y="Processus",
+                orientation="h", color_discrete_sequence=[COL_PRIMARY])
+    fig.update_layout(**PLOTLY_TEMPLATE["layout"], height=380, xaxis_title="KPR — Score de priorité")
+    st.plotly_chart(fig, width='stretch')
+
+    st.markdown("---")
+    st.markdown("### 📋 KPI — Indicateurs de Performance de la fonction Audit (démo session)")
+    st.caption(
+        "⚠️ Aucune donnée opérationnelle réelle (délais, missions clôturées...) n'a été fournie. "
+        "Les indicateurs ci-dessous sont calculés sur les actions effectuées **dans cette session** "
+        "à titre de démonstration du futur module de suivi de la performance de l'audit."
+    )
+
+    total_declares = len(st.session_state.pending_risks) + len(st.session_state.validated_session_risks) + len(st.session_state.rejected_session_risks)
+    taux_validation = (len(st.session_state.validated_session_risks) / total_declares * 100) if total_declares else 0
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Risques déclarés (session)", total_declares)
+    p2.metric("Taux de validation (session)", f"{taux_validation:.0f}%" if total_declares else "—")
+    p3.metric("Missions planifiées (session)", len(st.session_state.missions_plan))
+    p4.metric("Utilisateurs avec accès actif", int((st.session_state.users_directory["Accès"] == "Actif").sum()))
+
+
+# ----------------------------------------------------------------------------
+# PAGE 8 — GESTION DES ACCÈS (RBAC)
+# ----------------------------------------------------------------------------
+
+elif page == "👥 Gestion des accès":
+    header("Gestion des accès", "Attribution des rôles — réservé à l'Auditeur interne / Administrateur")
+
+    if st.session_state.current_role not in ROLES_GERENT_ACCES:
+        st.warning(
+            f"🔒 Accès réservé aux rôles **{', '.join(ROLES_GERENT_ACCES)}**. "
+            f"Vous êtes actuellement connecté en tant que **{st.session_state.current_role}**."
+        )
+    else:
+        st.markdown("#### Annuaire des utilisateurs")
+        st.dataframe(st.session_state.users_directory, width='stretch', hide_index=True)
+
+        st.markdown("#### ➕ Donner l'accès à un nouvel utilisateur")
+        with st.form("form_access"):
+            a1, a2, a3 = st.columns(3)
+            u_nom = a1.text_input("Nom complet")
+            u_email = a2.text_input("Email professionnel")
+            u_role = a3.selectbox("Rôle à attribuer", ROLES)
+            if st.form_submit_button("Accorder l'accès"):
+                if u_nom and u_email:
+                    new_user = pd.DataFrame([{"Nom": u_nom, "Email": u_email, "Rôle": u_role, "Accès": "Actif"}])
+                    st.session_state.users_directory = pd.concat([st.session_state.users_directory, new_user], ignore_index=True)
+                    st.success(f"Accès accordé à {u_nom} en tant que {u_role}.")
+                    st.rerun()
+                else:
+                    st.error("Merci de renseigner le nom et l'email.")
+
+        st.markdown("#### ✏️ Modifier / révoquer un accès existant")
+        idx = st.selectbox(
+            "Sélectionner un utilisateur",
+            st.session_state.users_directory.index,
+            format_func=lambda i: st.session_state.users_directory.loc[i, "Nom"],
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            nouveau_role = st.selectbox("Nouveau rôle", ROLES, index=ROLES.index(st.session_state.users_directory.loc[idx, "Rôle"]))
+        with c2:
+            if st.button("Mettre à jour le rôle", width='stretch'):
+                st.session_state.users_directory.loc[idx, "Rôle"] = nouveau_role
+                st.rerun()
+        with c3:
+            statut_actuel = st.session_state.users_directory.loc[idx, "Accès"]
+            label = "🔒 Révoquer l'accès" if statut_actuel == "Actif" else "✅ Activer l'accès"
+            if st.button(label, width='stretch'):
+                st.session_state.users_directory.loc[idx, "Accès"] = "Révoqué" if statut_actuel == "Actif" else "Actif"
+                st.rerun()
+
+    st.caption(
+        "⚠️ Démo pédagogique (session uniquement). Dans la version finale : authentification "
+        "(hash de mot de passe), tables `users` / `roles` / `permissions` en PostgreSQL, RBAC serveur."
+    )
+
+
+# ----------------------------------------------------------------------------
+# PAGE 9 — À PROPOS DU PROJET (contexte PFA / stage)
+# ----------------------------------------------------------------------------
+
+elif page == "ℹ️ À propos du projet":
+    header("À propos de ce projet", "Contexte académique et professionnel")
+
+    st.markdown(
+        """
+### 🎓 Contexte du stage
+
+Cette application a été développée dans le cadre d'un **stage PFA (Projet de Fin d'Année)**,
+par une étudiante en **2ᵉ année du cycle d'ingénieur, filière Finance et Actuariat**,
+au sein de l'**ORMVA-TF (Office Régional de Mise en Valeur Agricole du Tafilalet)**.
+
+**Sujet du stage :**
+« Développement d'un modèle d'aide à la décision pour la priorisation des missions
+d'audit interne à partir des données de la cartographie des risques : Cas de l'ORMVA-TF »
+
+**Encadrement :**
+- Encadrant professionnel (ORMVA-TF) : *[à compléter]*
+- Encadrant académique : *[à compléter]*
+- Période du stage : *[à compléter]*
+
+### 🎯 Objectif du projet
+
+Construire un système d'aide à la décision permettant à l'auditeur interne d'exploiter la
+cartographie des risques (159 risques, 12 processus), de calculer automatiquement les
+indicateurs de risque (criticité, DMR, VaR, TVaR), de prioriser les processus à auditer et
+de faciliter la planification des missions d'audit interne.
+
+### 🧮 Démarche méthodologique
+
+1. Analyse exploratoire et modélisation (Python, Google Colab) : ANOVA, régression du DMR,
+   clustering, simulation Monte Carlo, calcul de la VaR/TVaR.
+2. Construction d'un score de priorisation (0-100) et validation par corrélation de Spearman
+   avec le classement existant de l'ORMVA-TF (ρ = 0.98).
+3. Développement de ce prototype applicatif (Streamlit) pour rendre le modèle exploitable par
+   un auditeur interne au quotidien.
+
+### 🛠️ Prochaine étape
+
+Industrialisation vers une architecture complète (FastAPI + PostgreSQL + React) avec
+authentification réelle, base de données, RBAC serveur et audit trail persistant.
+        """
+    )
+
 st.markdown("---")
-st.caption("ORMVA-TF Risk & Audit Center · Données réelles : 159 risques, 12 processus · Prototype PFE Audit Interne & Actuariat")
+st.caption("ORMVA-TF Risk & Audit Center · Données réelles : 159 risques, 12 processus · Prototype PFA Audit Interne & Actuariat")
