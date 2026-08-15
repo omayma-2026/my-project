@@ -38,10 +38,10 @@ st.set_page_config(
 DATA_DIR = Path(__file__).parent / "data"
 
 # Palette institutionnelle : bleu acier / bleu nuit professionnel (identité "froide")
-COL_PRIMARY = "#2E2A4A"
-COL_PRIMARY_LT = "#4A4470"
-COL_SAGE = "#8B85B0"
-COL_SAGE_LT = "#EDEBF7"      # bleu très clair (fonds de cards)
+COL_PRIMARY = "#0F3D2E"
+COL_PRIMARY_LT = "#145C3F"
+COL_SAGE = "#7FA98C"
+COL_SAGE_LT = "#DCE9DF"     # bleu très clair (fonds de cards)
 COL_BG = "#F4F7F9"            # fond général
 COL_GRAY = "#2E3B47"          # gris-bleu foncé texte
 COL_WHITE = "#FFFFFF"
