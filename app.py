@@ -70,7 +70,7 @@ st.set_page_config(
 )
 
 DATA_DIR = Path(__file__).parent / "data"
-DATA_FILE = DATA_DIR / "cartographie_analysee_complete.xlsx"
+DATA_FILE = DATA_DIR / "cartographie_analysee_complet.xlsx"
 
 COL_PRIMARY = "#0F3D2E"
 COL_PRIMARY_LT = "#145C3F"
