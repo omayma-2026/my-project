@@ -284,7 +284,11 @@ if "page" not in st.session_state:
 
 @st.cache_data(show_spinner="Chargement de la cartographie des risques...")
 def load_data():
-    df = pd.read_excel(DATA_FILE, sheet_name="Details_Risques")
+    df = pd.read_excel(
+        DATA_FILE,
+        sheet_name="Details_Risques",
+        engine="openpyxl"
+    )
 
     rename_map = {
         "code": "code",
