@@ -284,7 +284,40 @@ if "page" not in st.session_state:
 
 @st.cache_data(show_spinner="Chargement de la cartographie des risques...")
 def load_data():
-    df = pd.read_excel(DATA_FILE, sheet_name="Details_Risques")
+
+    # Chercher automatiquement le fichier Excel dans le dossier data
+    excel_files = list(DATA_DIR.glob("*.xlsx"))
+
+    if not excel_files:
+        raise FileNotFoundError(
+            f"Aucun fichier .xlsx trouvé dans : {DATA_DIR}"
+        )
+
+    # Chercher en priorité le fichier de cartographie
+    matching_files = [
+        f for f in excel_files
+        if "cartographie_analysee_complete" in f.name.lower()
+    ]
+
+    if matching_files:
+        data_file = matching_files[0]
+    else:
+        data_file = excel_files[0]
+
+    # Lecture explicite avec openpyxl
+    try:
+        df = pd.read_excel(
+            data_file,
+            sheet_name="Details_Risques",
+            engine="openpyxl"
+        )
+    except Exception as e:
+        raise ValueError(
+            f"Impossible de lire le fichier Excel '{data_file.name}'. "
+            f"Vérifie que le fichier est bien un vrai fichier .xlsx "
+            f"et qu'il contient la feuille 'Details_Risques'. "
+            f"Erreur originale : {e}"
+        )
 
     rename_map = {
         "code": "code",
@@ -299,17 +332,29 @@ def load_data():
         "criticite_nette_declaree": "criticite_nette_declaree",
         "zone_officielle": "zone",
     }
+
     missing = [c for c in rename_map if c not in df.columns]
+
     if missing:
         raise ValueError(
             f"Colonnes obligatoires absentes de 'Details_Risques' : {missing}"
         )
+
     df = df.rename(columns=rename_map)
 
-    # Variables dérivées — méthodologie exacte du rapport (section 5.3)
+    # Variables dérivées
     df["degre_controle_pct"] = df["dmr"] * 100
-    df["criticite_nette_diagnostique"] = df["criticite_brute"] * (1 - df["dmr"])
-    df["zone"] = df["zone"].astype(str).str.strip().str.upper()
+    df["criticite_nette_diagnostique"] = (
+        df["criticite_brute"] * (1 - df["dmr"])
+    )
+
+    df["zone"] = (
+        df["zone"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+    )
+
     df["zone_severite"] = df["zone"].map(ZONE_SEVERITY)
 
     if "fonction" not in df.columns:
