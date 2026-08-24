@@ -284,7 +284,11 @@ if "page" not in st.session_state:
 
 @st.cache_data(show_spinner="Chargement de la cartographie des risques...")
 def load_data():
-    df = pd.read_excel(DATA_FILE, sheet_name="Details_Risques")
+    # engine="openpyxl" est forcé explicitement : sans ça, pandas essaie de
+    # deviner le format à partir du contenu et peut lever "Excel file format
+    # cannot be determined" sur un fichier légèrement atypique (BOM, en-tête
+    # inhabituel...) au lieu de l'erreur réelle et exploitable d'openpyxl.
+    df = pd.read_excel(DATA_FILE, sheet_name="Details_Risques", engine="openpyxl")
 
     rename_map = {
         "code": "code",
@@ -301,7 +305,7 @@ def load_data():
     }
     missing = [c for c in rename_map if c not in df.columns]
     if missing:
-        raise ValueError(
+        raise KeyError(
             f"Colonnes obligatoires absentes de 'Details_Risques' : {missing}"
         )
     df = df.rename(columns=rename_map)
@@ -342,14 +346,34 @@ def diagnose_data_file(path: Path) -> str:
             f"Aperçu du contenu : `{preview.strip()}`"
         )
     if head[:2] == b"PK":
-        return (
-            "Le fichier commence bien par la signature ZIP (`PK`), donc ce n'est pas un problème de "
-            "corruption binaire — la feuille `Details_Risques` est peut-être absente ou mal nommée."
-        )
+        try:
+            import zipfile
+            with zipfile.ZipFile(path) as z:
+                names = z.namelist()
+            if "[Content_Types].xml" not in names:
+                return (
+                    "Le fichier est une archive ZIP valide mais **pas un classeur Excel** (ce n'est pas un "
+                    "`.xlsx`) — c'est peut-être un `.docx`, un `.pptx`, ou un ZIP quelconque renommé par erreur."
+                )
+            return (
+                "Le fichier a la structure ZIP/xlsx correcte — la feuille `Details_Risques` est peut-être "
+                "absente ou mal nommée dans ce classeur."
+            )
+        except Exception:
+            return (
+                "Le fichier commence par la signature ZIP mais l'archive elle-même est corrompue/tronquée "
+                "(probablement un transfert ou un commit Git interrompu). Re-télécharge/re-committe le fichier."
+            )
     if head[:4] == b"\xd0\xcf\x11\xe0":
         return "Le fichier est en réalité un ancien format **`.xls` binaire** (Excel 97-2003), pas un `.xlsx`. Ré-enregistre-le en `.xlsx` depuis Excel/LibreOffice."
     if head.strip().lower().startswith((b"<!doctype", b"<html")):
         return "Le fichier contient du **HTML** (probablement une page d'erreur de téléchargement enregistrée par erreur avec l'extension `.xlsx`)."
+    if head[:1] in (b",", b'"') or b";" in head[:64] or head[:64].isascii():
+        return (
+            "Le contenu ressemble à du **texte brut (CSV ?)** et non à un fichier Excel binaire. "
+            f"Aperçu : `{head[:80].decode('utf-8', errors='replace').strip()}`. "
+            "Exporte plutôt le fichier au format `.xlsx` réel (pas un `.csv` renommé)."
+        )
     return (
         f"Le fichier ne commence pas par la signature ZIP attendue (`PK`) — premiers octets : {head[:16]!r}. "
         "Il a probablement été corrompu lors du transfert ou du commit Git. Si le fichier est hébergé sur "
@@ -367,7 +391,7 @@ except FileNotFoundError as e:
         f"Détail : {e}"
     )
     st.stop()
-except ValueError as e:
+except KeyError as e:
     st.error(f"⚠️ {e}")
     st.stop()
 except Exception as e:
