@@ -284,40 +284,7 @@ if "page" not in st.session_state:
 
 @st.cache_data(show_spinner="Chargement de la cartographie des risques...")
 def load_data():
-
-    # Chercher automatiquement le fichier Excel dans le dossier data
-    excel_files = list(DATA_DIR.glob("*.xlsx"))
-
-    if not excel_files:
-        raise FileNotFoundError(
-            f"Aucun fichier .xlsx trouvé dans : {DATA_DIR}"
-        )
-
-    # Chercher en priorité le fichier de cartographie
-    matching_files = [
-        f for f in excel_files
-        if "cartographie_analysee_complete" in f.name.lower()
-    ]
-
-    if matching_files:
-        data_file = matching_files[0]
-    else:
-        data_file = excel_files[0]
-
-    # Lecture explicite avec openpyxl
-    try:
-        df = pd.read_excel(
-            data_file,
-            sheet_name="Details_Risques",
-            engine="openpyxl"
-        )
-    except Exception as e:
-        raise ValueError(
-            f"Impossible de lire le fichier Excel '{data_file.name}'. "
-            f"Vérifie que le fichier est bien un vrai fichier .xlsx "
-            f"et qu'il contient la feuille 'Details_Risques'. "
-            f"Erreur originale : {e}"
-        )
+    df = pd.read_excel(DATA_FILE, sheet_name="Details_Risques")
 
     rename_map = {
         "code": "code",
@@ -332,35 +299,63 @@ def load_data():
         "criticite_nette_declaree": "criticite_nette_declaree",
         "zone_officielle": "zone",
     }
-
     missing = [c for c in rename_map if c not in df.columns]
-
     if missing:
         raise ValueError(
             f"Colonnes obligatoires absentes de 'Details_Risques' : {missing}"
         )
-
     df = df.rename(columns=rename_map)
 
-    # Variables dérivées
+    # Variables dérivées — méthodologie exacte du rapport (section 5.3)
     df["degre_controle_pct"] = df["dmr"] * 100
-    df["criticite_nette_diagnostique"] = (
-        df["criticite_brute"] * (1 - df["dmr"])
-    )
-
-    df["zone"] = (
-        df["zone"]
-        .astype(str)
-        .str.strip()
-        .str.upper()
-    )
-
+    df["criticite_nette_diagnostique"] = df["criticite_brute"] * (1 - df["dmr"])
+    df["zone"] = df["zone"].astype(str).str.strip().str.upper()
     df["zone_severite"] = df["zone"].map(ZONE_SEVERITY)
 
     if "fonction" not in df.columns:
         df["fonction"] = "—"
 
     return df
+
+
+def diagnose_data_file(path: Path) -> str:
+    """Diagnostic lisible en cas de fichier Excel invalide ou corrompu."""
+    if not path.exists():
+        return f"Le fichier n'existe pas à l'emplacement attendu : `{path}`."
+
+    size = path.stat().st_size
+    with open(path, "rb") as fh:
+        head = fh.read(64)
+
+    if size == 0:
+        return "Le fichier existe mais est **vide** (0 octet)."
+    if size < 2048:
+        preview = head[:120].decode("utf-8", errors="replace")
+        if "version https://git-lfs" in preview:
+            return (
+                f"Le fichier ne fait que {size} octets : c'est un **pointeur Git LFS**, pas le vrai fichier "
+                "binaire. Il faut activer Git LFS (`git lfs install` + `git lfs pull`) ou committer le fichier "
+                "directement sans LFS."
+            )
+        return (
+            f"Le fichier ne fait que {size} octets — beaucoup trop petit pour 168 observations. "
+            f"Aperçu du contenu : `{preview.strip()}`"
+        )
+    if head[:2] == b"PK":
+        return (
+            "Le fichier commence bien par la signature ZIP (`PK`), donc ce n'est pas un problème de "
+            "corruption binaire — la feuille `Details_Risques` est peut-être absente ou mal nommée."
+        )
+    if head[:4] == b"\xd0\xcf\x11\xe0":
+        return "Le fichier est en réalité un ancien format **`.xls` binaire** (Excel 97-2003), pas un `.xlsx`. Ré-enregistre-le en `.xlsx` depuis Excel/LibreOffice."
+    if head.strip().lower().startswith((b"<!doctype", b"<html")):
+        return "Le fichier contient du **HTML** (probablement une page d'erreur de téléchargement enregistrée par erreur avec l'extension `.xlsx`)."
+    return (
+        f"Le fichier ne commence pas par la signature ZIP attendue (`PK`) — premiers octets : {head[:16]!r}. "
+        "Il a probablement été corrompu lors du transfert ou du commit Git. Si le fichier est hébergé sur "
+        "GitHub, vérifie qu'un `.gitattributes` marque `*.xlsx binary` pour empêcher la conversion des fins "
+        "de ligne, puis re-committe le fichier."
+    )
 
 
 try:
@@ -374,6 +369,14 @@ except FileNotFoundError as e:
     st.stop()
 except ValueError as e:
     st.error(f"⚠️ {e}")
+    st.stop()
+except Exception as e:
+    diag = diagnose_data_file(DATA_FILE)
+    st.error(
+        f"⚠️ Impossible de lire le fichier Excel `{DATA_FILE.name}`.\n\n"
+        f"**Diagnostic** : {diag}\n\n"
+        f"*Erreur originale : {e}*"
+    )
     st.stop()
 
 ALL_PROCESSUS = sorted(RISQUES["processus_code"].dropna().unique().tolist())
