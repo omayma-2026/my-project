@@ -8,8 +8,10 @@ Cette version est strictement conforme à la méthodologie décrite dans le
 rapport de stage (Chapitre 5 — Conception du modèle sous Python, Chapitre 6 —
 Restitution décisionnelle et application web) :
 
-    - Le périmètre analytique comprend 168 observations de risques réparties
-      entre 13 unités d'analyse (P1 à P12, ainsi que PM).
+    - La base analytique principale constitue le périmètre retenu de 159 risques.
+      Elle est complétée par la source cartographique de 168 observations.
+      Le rapprochement est effectué par `code` avec une jointure gauche afin de conserver
+      toutes les observations de la base analytique.
     - Les zones de risque A/B/C/D sont les zones OFFICIELLES fournies par la
       cartographie institutionnelle (colonne `zone_officielle`) — elles ne
       sont PAS recalculées par seuils médians.
@@ -37,8 +39,8 @@ Les 6 fonctionnalités couvertes (Chapitre 6.3.2 du rapport) :
        analyse de sensibilité des pondérations)
     6. Présentation des composantes du Score de Priorité d'Audit
 
-Toutes les statistiques sont recalculées EN DIRECT à partir de la base réelle
-`data/cartographie_analysee_complete.xlsx` (feuille "Details_Risques"),
+Toutes les statistiques sont recalculées EN DIRECT à partir du rapprochement de la base
+`data/cartographie_analysee_complete.xlsx` et de la source `data/ORMVATF_cartographie_risques_extraite.xlsx`,
 conformément au notebook Python du mémoire. Aucune donnée n'est inventée.
 
 Lancer avec :
@@ -70,7 +72,10 @@ st.set_page_config(
 )
 
 DATA_DIR = Path(__file__).parent / "data"
-DATA_FILE = DATA_DIR / "cartographie_analysee_complete.xlsx"
+ANALYSED_FILE = DATA_DIR / "cartographie_analysee_complete.xlsx"
+EXTRA_FILE = DATA_DIR / "ORMVATF_cartographie_risques_extraite.xlsx"
+ANALYSED_FALLBACKS = [ANALYSED_FILE, DATA_DIR / "data_reel.xlsx"]
+EXTRA_FALLBACKS = [EXTRA_FILE, DATA_DIR / "cartographie_risques_ORMVA-TF_complete.xlsx"]
 
 COL_PRIMARY = "#0F3D2E"
 COL_PRIMARY_LT = "#145C3F"
@@ -282,126 +287,66 @@ if "page" not in st.session_state:
 # 1. CHARGEMENT DES DONNÉES RÉELLES (mis en cache)
 # ----------------------------------------------------------------------------
 
-@st.cache_data(show_spinner="Chargement de la cartographie des risques...")
+@st.cache_data(show_spinner="Chargement et rapprochement des sources cartographiques...")
+def _first_existing(paths):
+    return next((p for p in paths if p.exists()), None)
+
+
+def _canonicalize(df):
+    df=df.copy(); df.columns=[str(c).strip() for c in df.columns]
+    aliases={
+        "Code":"code","code":"code","Processus":"processus_nom","processus":"processus_nom","processus_nom":"processus_nom",
+        "Processus_code":"processus_code","processus_code":"processus_code","Fonction":"fonction","fonction":"fonction",
+        "Sous-processus":"sous_processus","Sous_processus":"sous_processus","sous_processus":"sous_processus",
+        "Intitule":"intitule","intitule":"intitule","Prob":"prob","prob":"prob","Grav":"grav","grav":"grav",
+        "Criticite_Brute":"criticite_brute","Criticité brute":"criticite_brute","criticite_brute_declaree":"criticite_brute","criticite_brute":"criticite_brute",
+        "DMR":"dmr","dmr":"dmr","Criticite_Nette":"criticite_nette_declaree","Criticité_Nette":"criticite_nette_declaree","criticite_nette_declaree":"criticite_nette_declaree",
+        "zone_officielle":"zone","Zone_Officielle":"zone","zone":"zone"}
+    return df.rename(columns={c:aliases[c] for c in df.columns if c in aliases})
+
+
 def load_data():
-    # engine="openpyxl" est forcé explicitement : sans ça, pandas essaie de
-    # deviner le format à partir du contenu et peut lever "Excel file format
-    # cannot be determined" sur un fichier légèrement atypique (BOM, en-tête
-    # inhabituel...) au lieu de l'erreur réelle et exploitable d'openpyxl.
-    df = pd.read_excel(DATA_FILE, sheet_name="Details_Risques", engine="openpyxl")
+    analysed_path=_first_existing(ANALYSED_FALLBACKS); extra_path=_first_existing(EXTRA_FALLBACKS)
+    if analysed_path is None: raise FileNotFoundError(f"Base analytique introuvable : {ANALYSED_FILE}")
+    if extra_path is None: raise FileNotFoundError(f"Source complémentaire introuvable : {EXTRA_FILE}")
+    base=_canonicalize(pd.read_excel(analysed_path,sheet_name=0,engine="openpyxl"))
+    extra=_canonicalize(pd.read_excel(extra_path,sheet_name=0,engine="openpyxl"))
+    if "code" not in base.columns or "code" not in extra.columns: raise ValueError("Les deux fichiers doivent contenir une colonne 'code'.")
+    base["code"]=base["code"].astype(str).str.strip(); extra["code"]=extra["code"].astype(str).str.strip()
+    if base["code"].duplicated().any(): raise ValueError("Codes dupliqués dans la base analytique principale.")
+    extra=extra.drop_duplicates("code",keep="first")
 
-    rename_map = {
-        "code": "code",
-        "processus_code": "processus_code",
-        "processus_nom": "processus_nom",
-        "fonction": "fonction",
-        "sous_processus": "sous_processus",
-        "prob": "prob",
-        "grav": "grav",
-        "criticite_brute_declaree": "criticite_brute",
-        "dmr": "dmr",
-        "criticite_nette_declaree": "criticite_nette_declaree",
-        "zone_officielle": "zone",
-    }
-    missing = [c for c in rename_map if c not in df.columns]
-    if missing:
-        raise KeyError(
-            f"Colonnes obligatoires absentes de 'Details_Risques' : {missing}"
-        )
-    df = df.rename(columns=rename_map)
+    # LEFT JOIN : la base analytique est la référence et ses 159 lignes sont conservées.
+    cols=[c for c in ["processus_code","processus_nom","fonction","sous_processus","intitule","prob","grav","criticite_brute","dmr","criticite_nette_declaree","zone"] if c in extra.columns]
+    e=extra[["code"]+cols].copy(); overlap=[c for c in cols if c in base.columns]
+    e=e.rename(columns={c:f"{c}__extra" for c in overlap})
+    df=base.merge(e,on="code",how="left",validate="one_to_one")
+    for c in cols:
+        ec=f"{c}__extra"
+        if c in df.columns and ec in df.columns: df[c]=df[c].where(df[c].notna(),df[ec]); df.drop(columns=ec,inplace=True)
+        elif c not in df.columns and ec in df.columns: df.rename(columns={ec:c},inplace=True)
 
-    # Variables dérivées — méthodologie exacte du rapport (section 5.3)
-    df["degre_controle_pct"] = df["dmr"] * 100
-    df["criticite_nette_diagnostique"] = df["criticite_brute"] * (1 - df["dmr"])
-    df["zone"] = df["zone"].astype(str).str.strip().str.upper()
-    df["zone_severite"] = df["zone"].map(ZONE_SEVERITY)
-
-    if "fonction" not in df.columns:
-        df["fonction"] = "—"
-
+    required=["code","processus_code","processus_nom","sous_processus","prob","grav","criticite_brute","dmr","criticite_nette_declaree","zone"]
+    missing=[c for c in required if c not in df.columns]
+    if missing: raise ValueError(f"Colonnes obligatoires absentes après rapprochement : {missing}")
+    if "fonction" not in df.columns: df["fonction"]="—"
+    df["fonction"]=df["fonction"].fillna("—").astype(str).str.strip()
+    df["degre_controle_pct"]=pd.to_numeric(df["dmr"],errors="coerce")*100
+    df["criticite_nette_diagnostique"]=pd.to_numeric(df["criticite_brute"],errors="coerce")*(1-pd.to_numeric(df["dmr"],errors="coerce"))
+    df["zone"]=df["zone"].astype(str).str.strip().str.upper(); df["zone_severite"]=df["zone"].map(ZONE_SEVERITY)
+    df["criticite_brute_recalculee"]=pd.to_numeric(df["prob"],errors="coerce")*pd.to_numeric(df["grav"],errors="coerce")
+    df["ecart_criticite_brute"]=(df["criticite_brute_recalculee"]-pd.to_numeric(df["criticite_brute"],errors="coerce")).abs()
+    df.attrs.update(base_file=analysed_path.name,extra_file=extra_path.name,base_n=len(base),extra_n=len(extra),matched_n=int(df.code.isin(extra.code).sum()),unmatched_n=int((~df.code.isin(extra.code)).sum()),extra_only_n=int((~extra.code.isin(base.code)).sum()))
     return df
 
 
-def diagnose_data_file(path: Path) -> str:
-    """Diagnostic lisible en cas de fichier Excel invalide ou corrompu."""
-    if not path.exists():
-        return f"Le fichier n'existe pas à l'emplacement attendu : `{path}`."
-
-    size = path.stat().st_size
-    with open(path, "rb") as fh:
-        head = fh.read(64)
-
-    if size == 0:
-        return "Le fichier existe mais est **vide** (0 octet)."
-    if size < 2048:
-        preview = head[:120].decode("utf-8", errors="replace")
-        if "version https://git-lfs" in preview:
-            return (
-                f"Le fichier ne fait que {size} octets : c'est un **pointeur Git LFS**, pas le vrai fichier "
-                "binaire. Il faut activer Git LFS (`git lfs install` + `git lfs pull`) ou committer le fichier "
-                "directement sans LFS."
-            )
-        return (
-            f"Le fichier ne fait que {size} octets — beaucoup trop petit pour 168 observations. "
-            f"Aperçu du contenu : `{preview.strip()}`"
-        )
-    if head[:2] == b"PK":
-        try:
-            import zipfile
-            with zipfile.ZipFile(path) as z:
-                names = z.namelist()
-            if "[Content_Types].xml" not in names:
-                return (
-                    "Le fichier est une archive ZIP valide mais **pas un classeur Excel** (ce n'est pas un "
-                    "`.xlsx`) — c'est peut-être un `.docx`, un `.pptx`, ou un ZIP quelconque renommé par erreur."
-                )
-            return (
-                "Le fichier a la structure ZIP/xlsx correcte — la feuille `Details_Risques` est peut-être "
-                "absente ou mal nommée dans ce classeur."
-            )
-        except Exception:
-            return (
-                "Le fichier commence par la signature ZIP mais l'archive elle-même est corrompue/tronquée "
-                "(probablement un transfert ou un commit Git interrompu). Re-télécharge/re-committe le fichier."
-            )
-    if head[:4] == b"\xd0\xcf\x11\xe0":
-        return "Le fichier est en réalité un ancien format **`.xls` binaire** (Excel 97-2003), pas un `.xlsx`. Ré-enregistre-le en `.xlsx` depuis Excel/LibreOffice."
-    if head.strip().lower().startswith((b"<!doctype", b"<html")):
-        return "Le fichier contient du **HTML** (probablement une page d'erreur de téléchargement enregistrée par erreur avec l'extension `.xlsx`)."
-    if head[:1] in (b",", b'"') or b";" in head[:64] or head[:64].isascii():
-        return (
-            "Le contenu ressemble à du **texte brut (CSV ?)** et non à un fichier Excel binaire. "
-            f"Aperçu : `{head[:80].decode('utf-8', errors='replace').strip()}`. "
-            "Exporte plutôt le fichier au format `.xlsx` réel (pas un `.csv` renommé)."
-        )
-    return (
-        f"Le fichier ne commence pas par la signature ZIP attendue (`PK`) — premiers octets : {head[:16]!r}. "
-        "Il a probablement été corrompu lors du transfert ou du commit Git. Si le fichier est hébergé sur "
-        "GitHub, vérifie qu'un `.gitattributes` marque `*.xlsx binary` pour empêcher la conversion des fins "
-        "de ligne, puis re-committe le fichier."
-    )
-
-
 try:
-    RISQUES = load_data()
-except FileNotFoundError as e:
-    st.error(
-        "⚠️ Fichier de données introuvable. Place `cartographie_analysee_complete.xlsx` "
-        "(feuille `Details_Risques`) dans le dossier `data/` à côté de `app.py`.\n\n"
-        f"Détail : {e}"
-    )
-    st.stop()
-except KeyError as e:
-    st.error(f"⚠️ {e}")
-    st.stop()
+    RISQUES=load_data()
+except (FileNotFoundError,ValueError) as e:
+    st.error(f"⚠️ {e}"); st.stop()
 except Exception as e:
-    diag = diagnose_data_file(DATA_FILE)
-    st.error(
-        f"⚠️ Impossible de lire le fichier Excel `{DATA_FILE.name}`.\n\n"
-        f"**Diagnostic** : {diag}\n\n"
-        f"*Erreur originale : {e}*"
-    )
-    st.stop()
+    st.error(f"⚠️ Erreur lors du chargement/rapprochement des sources Excel : {e}"); st.stop()
+
 
 ALL_PROCESSUS = sorted(RISQUES["processus_code"].dropna().unique().tolist())
 ALL_FONCTIONS = sorted(RISQUES["fonction"].dropna().unique().tolist())
@@ -502,8 +447,8 @@ with st.sidebar:
         selected_fonctions = ALL_FONCTIONS
 
     st.markdown("---")
-    st.caption(f"{len(RISQUES)} observations réelles · {len(ALL_PROCESSUS)} unités d'analyse")
-    st.caption("Périmètre analytique : P1 à P12, ainsi que PM")
+    st.caption(f"{len(RISQUES)} risques retenus · {len(ALL_PROCESSUS)} unités d'analyse")
+    st.caption(f"Sources : {RISQUES.attrs.get('base_file','—')} + {RISQUES.attrs.get('extra_file','—')}")
 
 if not selected_processus:
     selected_processus = ALL_PROCESSUS
@@ -544,6 +489,11 @@ if page == "📊 1. Indicateurs clés":
     score_max = SC["Score_Priorite_Audit"].max() if len(SC) else np.nan
     c7.metric("Score de priorité max", f"{score_max:.1f}" if pd.notna(score_max) else "—")
     c8.metric("Criticité nette déclarée (moy.)", f"{R['criticite_nette_declaree'].mean():.2f}" if len(R) else "—")
+    st.caption(
+        f"Rapprochement : {RISQUES.attrs.get('base_n', len(RISQUES))} risques dans la base principale · "
+        f"{RISQUES.attrs.get('extra_n', '—')} dans la source complémentaire · "
+        f"{RISQUES.attrs.get('unmatched_n', 0)} non apparié(s) conservé(s)."
+    )
 
     st.markdown("---")
 
@@ -594,13 +544,10 @@ if page == "📊 1. Indicateurs clés":
 # ============================================================================
 
 elif page == "🗂️ 2. Données & variables":
-    header("Données & variables", "Exploration de la base analytique — 168 observations, 13 unités d'analyse")
+    header("Données & variables", f"Exploration de la base analytique — {len(RISQUES)} risques retenus, {len(ALL_PROCESSUS)} unités d'analyse")
 
     st.info(
-        "ℹ️ Le document institutionnel de référence fait apparaître **159 risques**, tandis que la "
-        "base Excel effectivement utilisée pour les traitements analytiques comprend **168 observations** "
-        "réparties entre 13 unités d'analyse (P1 à P12, ainsi que PM). Cet écart, documenté dans le rapport, "
-        "doit être rapproché de la source institutionnelle avant toute utilisation opérationnelle."
+        f"ℹ️ La base analytique principale contient **{len(RISQUES)} risques retenus** et la source complémentaire **{RISQUES.attrs.get('extra_n','—')} observations**. Le rapprochement est une jointure gauche sur `code` : les {len(RISQUES)} risques de la base principale sont tous conservés, dont {RISQUES.attrs.get('unmatched_n',0)} sans correspondance complémentaire."
     )
 
     tab1, tab2 = st.tabs(["📋 Détail des risques", "📖 Dictionnaire des variables"])
@@ -1111,4 +1058,4 @@ elif page == "🧮 6. Composantes du score":
 
 
 st.markdown("---")
-st.caption("ORMVA-TF Risk & Audit Center · Données réelles : 168 observations, 13 unités d'analyse (P1-P12, PM) · Interface de consultation — Prototype PFA Audit Interne & Actuariat")
+st.caption("ORMVA-TF Risk & Audit Center · Données réelles rapprochées par code · Interface de consultation — Prototype PFA Audit Interne & Actuariat")
