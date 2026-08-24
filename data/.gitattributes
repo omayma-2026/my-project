@@ -1,9 +1,0 @@
-# Empêche Git de convertir les fins de ligne (CRLF/LF) sur les fichiers
-# binaires — une cause fréquente de l'erreur "File is not a zip file" sur les
-# fichiers .xlsx après un commit/push sur GitHub.
-*.xlsx binary
-*.xls  binary
-*.png  binary
-*.jpg  binary
-*.jpeg binary
-*.pdf  binary
