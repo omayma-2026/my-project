@@ -74,8 +74,15 @@ st.set_page_config(
 DATA_DIR = Path(__file__).parent / "data"
 ANALYSED_FILE = DATA_DIR / "cartographie_analysee_complete.xlsx"
 EXTRA_FILE = DATA_DIR / "ORMVATF_cartographie_risques_extraite.xlsx"
-ANALYSED_FALLBACKS = [ANALYSED_FILE, DATA_DIR / "data_reel.xlsx"]
-EXTRA_FALLBACKS = [EXTRA_FILE, DATA_DIR / "cartographie_risques_ORMVA-TF_complete.xlsx"]
+ANALYSED_FALLBACKS = [
+    DATA_DIR / "cartographie_analysee_complete.xlsx",
+    DATA_DIR / "data_reel.xlsx",
+]
+EXTRA_FALLBACKS = [
+    DATA_DIR / "ORMVATF_cartographie_risques_extraite.xlsx",
+    DATA_DIR / "cartographie_risques_ORMVA-TF_complete.xlsx",
+    DATA_DIR / "ORMVATF_cartographie_risques_complete.xlsx",
+]
 
 COL_PRIMARY = "#0F3D2E"
 COL_PRIMARY_LT = "#145C3F"
@@ -287,9 +294,46 @@ if "page" not in st.session_state:
 # 1. CHARGEMENT DES DONNÉES RÉELLES (mis en cache)
 # ----------------------------------------------------------------------------
 
-@st.cache_data(show_spinner="Chargement et rapprochement des sources cartographiques...")
 def _first_existing(paths):
-    return next((p for p in paths if p.exists()), None)
+    return next((p for p in paths if p.exists() and p.is_file()), None)
+
+
+def _resolve_sources():
+    """Résout les deux fichiers Excel sans dépendre d'un nom unique."""
+    analysed_path = _first_existing(ANALYSED_FALLBACKS)
+    extra_path = _first_existing(EXTRA_FALLBACKS)
+
+    xlsx_files = sorted(DATA_DIR.glob("*.xlsx"))
+
+    if analysed_path is None:
+        candidates = [
+            p for p in xlsx_files
+            if extra_path is None or p.resolve() != extra_path.resolve()
+        ]
+        preferred = [
+            p for p in candidates
+            if any(k in p.name.lower() for k in ("analyse", "analys", "data_reel"))
+        ]
+        if preferred:
+            analysed_path = preferred[0]
+        elif candidates:
+            analysed_path = candidates[0]
+
+    if extra_path is None:
+        candidates = [
+            p for p in xlsx_files
+            if analysed_path is None or p.resolve() != analysed_path.resolve()
+        ]
+        preferred = [
+            p for p in candidates
+            if any(k in p.name.lower() for k in ("ormva", "cartographie", "extrait", "risque"))
+        ]
+        if preferred:
+            extra_path = preferred[0]
+        elif candidates:
+            extra_path = candidates[0]
+
+    return analysed_path, extra_path
 
 
 def _canonicalize(df):
@@ -305,10 +349,22 @@ def _canonicalize(df):
     return df.rename(columns={c:aliases[c] for c in df.columns if c in aliases})
 
 
+@st.cache_data(show_spinner="Chargement et rapprochement des sources cartographiques...")
 def load_data():
-    analysed_path=_first_existing(ANALYSED_FALLBACKS); extra_path=_first_existing(EXTRA_FALLBACKS)
-    if analysed_path is None: raise FileNotFoundError(f"Base analytique introuvable : {ANALYSED_FILE}")
-    if extra_path is None: raise FileNotFoundError(f"Source complémentaire introuvable : {EXTRA_FILE}")
+    analysed_path, extra_path = _resolve_sources()
+
+    if analysed_path is None:
+        raise FileNotFoundError(
+            "Base analytique introuvable dans le dossier data/. "
+            "Ajoutez cartographie_analysee_complete.xlsx ou data_reel.xlsx."
+        )
+
+    if extra_path is None:
+        raise FileNotFoundError(
+            "Source cartographique complémentaire introuvable dans le dossier data/. "
+            "Ajoutez ORMVATF_cartographie_risques_extraite.xlsx ou "
+            "cartographie_risques_ORMVA-TF_complete.xlsx."
+        )
     base=_canonicalize(pd.read_excel(analysed_path,sheet_name=0,engine="openpyxl"))
     extra=_canonicalize(pd.read_excel(extra_path,sheet_name=0,engine="openpyxl"))
     if "code" not in base.columns or "code" not in extra.columns: raise ValueError("Les deux fichiers doivent contenir une colonne 'code'.")
