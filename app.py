@@ -63,9 +63,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent
 FILE_ANALYSE = DATA_DIR / "cartographie_analysee_complete.xlsx"
-FILE_EXTRAIT = DATA_DIR / "ORMVATF_cartographie_risques_extraite.xlsx"
+FILE_EXTRAIT = DATA_DIR / "data_reel_avec_rm.xlsx"
 
 COL_PRIMARY = "#0F3D2E"
 COL_PRIMARY_LT = "#145C3F"
@@ -317,7 +317,7 @@ try:
 except FileNotFoundError as e:
     st.error(
         "⚠️ Fichier(s) de données introuvable(s). Place `cartographie_analysee_complete.xlsx` "
-        "et `ORMVATF_cartographie_risques_extraite.xlsx` dans le dossier `data/` à côté de `app.py`.\n\n"
+        "et `data_reel_avec_rm.xlsx` directement à côté de `app.py` (même dossier, pas de sous-dossier data/).\n\n"
         f"Détail : {e}"
     )
     st.stop()
