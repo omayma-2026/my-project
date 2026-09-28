@@ -1,11 +1,20 @@
 """ORMVA-TF Risk & Audit Center — outil de travail pour l'auditeur interne et le risk manager."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from scipy import stats
 
-import core
+try:
+    import core
+except ModuleNotFoundError:
+    st.error("`core.py` est introuvable à côté de `app.py`. Ajoute-le au dépôt GitHub (même dossier), puis redéploie.")
+    st.stop()
 from core import ZCOL, ZONES
 
 st.set_page_config(page_title="ORMVA-TF | Risk & Audit Center", page_icon="🛡️", layout="wide")
