@@ -150,6 +150,26 @@ def check(u, pw):
     return r["role"] if secrets.compare_digest(_hash(pw, r["salt"]), r["pw"]) else None
 
 
+def apply_recovery():
+    """Récupération d'accès : si un fichier RESET_ADMIN.txt (contenu  identifiant:motdepasse) existe à côté de
+    app.py, ce compte est (re)créé en administrateur avec ce mot de passe, puis le fichier est supprimé."""
+    f = ROOT / "RESET_ADMIN.txt"
+    if not f.exists():
+        return None
+    try:
+        u, pw = f.read_text(encoding="utf-8-sig").strip().split(":", 1)
+        u, pw = u.strip(), pw.strip()
+    except ValueError:
+        f.unlink()
+        return "RESET_ADMIN.txt ignoré : format attendu  identifiant:motdepasse"
+    f.unlink()
+    if not u or len(pw) < 8:
+        return "RESET_ADMIN.txt ignoré : identifiant requis et mot de passe de 8 caractères minimum."
+    add_user(u, pw, "admin")
+    log(u, "utilisateur", "réinitialisation accès admin", "", u)
+    return f"Accès réinitialisé : connecte-toi avec l'identifiant « {u} » et le mot de passe du fichier."
+
+
 # ---------- modification d'un risque (avec historique) ----------
 def _same(a, b):
     try:
@@ -224,6 +244,8 @@ except FileNotFoundError as e:
     st.error(f"{e} Mets `cartographie_analysee_complete.xlsx` et `data_reel_avec_rm.xlsx` dans le même dossier que `app.py`, puis relance.")
     st.stop()
 
+RECOVERY_MSG = apply_recovery()
+
 # ---------- première utilisation : création de l'administrateur ----------
 if q("SELECT COUNT(*) n FROM users")["n"][0] == 0:
     st.title("Configuration initiale")
@@ -242,6 +264,9 @@ if q("SELECT COUNT(*) n FROM users")["n"][0] == 0:
 # ---------- connexion ----------
 if "user" not in st.session_state:
     st.title("🛡️ ORMVA-TF · Risk & Audit Center")
+    if RECOVERY_MSG:
+        st.info(RECOVERY_MSG)
+    st.caption(f"Base de données : {DB}")
     with st.form("login"):
         u, p = st.text_input("Identifiant"), st.text_input("Mot de passe", type="password")
         if st.form_submit_button("Se connecter"):
