@@ -1,334 +1,22 @@
-"""ORMVA-TF Risk & Audit Center — outil de travail pour l'auditeur interne et le risk manager.
-Fichier unique. Placer à côté de app.py : cartographie_analysee_complete.xlsx et data_reel_avec_rm.xlsx.
-Dépendances : streamlit pandas numpy plotly scipy openpyxl
-"""
-import hashlib, os, secrets
-from datetime import datetime
+"""ORMVA-TF Risk & Audit Center — outil de travail pour l'auditeur interne et le risk manager."""
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 from scipy import stats
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL, make_url
 
-# =====================================================================
-# COUCHE DONNÉES : SQLite, authentification, historique, calculs
-# =====================================================================
-ROOT = Path(__file__).parent
-
-
-def _secret(path, default=None):
-    """Lecture tolérante d'un secret Streamlit : ne plante jamais, même si aucun secrets.toml
-    n'existe du tout (cas d'un lancement local sans configuration)."""
-    try:
-        v = st.secrets
-        for p in path:
-            v = v[p]
-        return v
-    except Exception:
-        return default
-
-
-def _db_url():
-    """URL de connexion à la base. Priorité :
-    1) secret Streamlit [database] host/port/user/password/dbname -> assemblée ici de façon sûre
-       (le mot de passe peut contenir n'importe quel caractère, aucun encodage manuel requis).
-    2) secret Streamlit DATABASE_URL (chaîne déjà assemblée, ex. copiée telle quelle depuis Supabase).
-    3) variable d'environnement ORMVATF_DB_URL.
-    4) fichier SQLite local à côté de app.py (persistant tant que le disque local l'est, ex. ton PC).
-    Une base Postgres (Supabase/Neon...) n'est, contrairement au fichier SQLite local, jamais effacée
-    sur un hébergement à disque éphémère (Streamlit Community Cloud)."""
-    d = _secret(["database"])
-    if d and d.get("host") and d.get("user") and d.get("password"):
-        return URL.create(
-            "postgresql+psycopg2",
-            username=str(d["user"]),
-            password=str(d["password"]),
-            host=str(d["host"]),
-            port=int(d.get("port", 5432)),
-            database=str(d.get("dbname", "postgres")),
-        )
-
-    u = _secret(["DATABASE_URL"], "") or os.getenv("ORMVATF_DB_URL", "")
-    if u:
-        url = make_url(u)
-        if url.drivername == "postgresql":  # force le pilote psycopg2 (installé via requirements.txt) ;
-            url = url.set(drivername="postgresql+psycopg2")  # sans ça, certaines versions de SQLAlchemy
-        return url                                           # essaient 'psycopg' (v3), non installé.
-    return f"sqlite:///{ROOT / 'ormvatf.db'}"
-
-
-def _mask(u):
-    s = u.render_as_string(hide_password=True) if hasattr(u, "render_as_string") else str(u)
-    if "@" in s and "://" in s and "***" not in s:
-        head, tail = s.split("://", 1)
-        if "@" in tail:
-            creds, rest = tail.split("@", 1)
-            user = creds.split(":", 1)[0] if ":" in creds else creds
-            s = f"{head}://{user}:****@{rest}"
-    return s
-
-
-def _connection_help(e):
-    st.error(
-        "⚠️ Impossible de se connecter à la base de données.\n\n"
-        f"**Connexion lue (mot de passe masqué)** : `{_mask(DB_URL)}`\n\n"
-        f"**Erreur technique** : {e}\n\n"
-        "Le plus fiable dans Settings → Secrets : des champs séparés, sans aucun encodage à faire "
-        "sur le mot de passe (il peut contenir n'importe quel caractère) :\n"
-        "```\n[database]\nhost = \"aws-1-eu-west-1.pooler.supabase.com\"\nport = 6543\n"
-        "user = \"postgres.xxxx\"\npassword = \"TonMotDePasse\"\ndbname = \"postgres\"\n```\n\n"
-        "Vérifie aussi, dans Supabase : le projet est actif (pas en pause), le mot de passe est "
-        "correct, et `requirements.txt` contient bien `sqlalchemy` et `psycopg2-binary`."
-    )
-    st.stop()
-
-
-DB_URL = _db_url()
 try:
-    ENGINE = create_engine(DB_URL, pool_pre_ping=True)
-    with ENGINE.connect():
-        pass  # vérifie une vraie connexion maintenant, pas seulement le format de l'URL
-except Exception as e:
-    _connection_help(e)
-IS_SQLITE = ENGINE.dialect.name == "sqlite"
-DB = DB_URL if not IS_SQLITE else str(ROOT / "ormvatf.db")
-ZONES = ["A", "B", "C", "D"]
-ZSEV = {"A": 1, "B": 2, "C": 3, "D": 4}
-ZCOL = {"A": "#2E7D4F", "B": "#D9A441", "C": "#E08E45", "D": "#C0392B"}
-ZNAME = {"A": "Optimisation", "B": "Vigilance", "C": "Surveillance", "D": "Traitement"}
-# Bandes du document : [0-4[ [4-8[ [8-12[ [12-16]  (borne haute exclue)
-CRIT_BINS = [0, 4, 8, 12, 17]
-CRIT_LABELS = ["Faible [0-4[", "Moyen [4-8[", "Significatif [8-12[", "Élevé [12-16]"]
-CTRL_LABELS = ["Faible ≤25%", "Partiel ≤50%", "Correcte ≤75%", "Satisfaisant ≤100%"]
-WEIGHTS = {"D": 0.45, "C": 0.30, "brut": 0.25}
-SCENARIOS = {
-    "Base": WEIGHTS,
-    "Dominant D": {"D": 0.60, "C": 0.20, "brut": 0.20},
-    "Dominant C": {"D": 0.30, "C": 0.50, "brut": 0.20},
-    "Dominant brut": {"D": 0.25, "C": 0.25, "brut": 0.50},
-    "Équilibre": {"D": 1 / 3, "C": 1 / 3, "brut": 1 / 3},
-}
-AUTOINC = "INTEGER PRIMARY KEY AUTOINCREMENT" if IS_SQLITE else "SERIAL PRIMARY KEY"
-SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, salt TEXT, pw TEXT, role TEXT, active INTEGER DEFAULT 1, created TEXT);
-CREATE TABLE IF NOT EXISTS history(id {AUTOINC}, ts TEXT, auteur TEXT, obj TEXT, champ TEXT, ancien TEXT, nouveau TEXT);
-CREATE TABLE IF NOT EXISTS actions(id {AUTOINC}, code TEXT, action TEXT, responsable TEXT, echeance TEXT, statut TEXT, maj TEXT);
-"""
-now = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    import core
+except ModuleNotFoundError:
+    st.error("`core.py` est introuvable à côté de `app.py`. Ajoute-le au dépôt GitHub (même dossier), puis redéploie.")
+    st.stop()
+from core import ZCOL, ZONES
 
-
-def _prep(sql, p):
-    """Convertit les '?' positionnels (style sqlite3) en paramètres nommés SQLAlchemy, pour que le
-    même code SQL fonctionne avec SQLite (local) ou Postgres (base distante persistante)."""
-    parts = sql.split("?")
-    if len(parts) == 1:
-        return text(sql), {}
-    out, d = parts[0], {}
-    for i, part in enumerate(parts[1:]):
-        k = f"p{i}"
-        d[k] = p[i]
-        out += f":{k}" + part
-    return text(out), d
-
-
-def q(sql, p=()):
-    stmt, d = _prep(sql, p)
-    with ENGINE.connect() as c:
-        return pd.read_sql_query(stmt, c, params=d)
-
-
-def ex(sql, p=()):
-    stmt, d = _prep(sql, p)
-    with ENGINE.begin() as c:
-        c.execute(stmt, d)
-
-
-def log(auteur, obj, champ, old="", new=""):
-    ex("INSERT INTO history(ts,auteur,obj,champ,ancien,nouveau) VALUES(?,?,?,?,?,?)",
-       (now(), auteur, obj, champ, str(old), str(new)))
-
-
-# ---------- zones (règle du document) ----------
-def zone_rule(crit, dmr):
-    """crit >= 8 et contrôle <= 50% -> D ; crit >= 8 et contrôle > 50% -> C ;
-    crit < 8 et contrôle <= 50% -> B ; sinon A."""
-    crit, dmr = np.asarray(crit, float), np.asarray(dmr, float)
-    return np.where(crit >= 8, np.where(dmr > 0.5, "C", "D"), np.where(dmr > 0.5, "A", "B"))
-
-
-def bands(df):
-    d = df.copy()
-    d["bc"] = pd.cut(d["criticite_brute"], CRIT_BINS, labels=False, right=False).astype(int)
-    d["br"] = pd.cut((d["dmr"] * 100).round(6), [-1, 25, 50, 75, 100.5], labels=False).astype(int)
-    return d
-
-
-# ---------- initialisation & données ----------
-def _find(name):
-    for d in (ROOT / "data", ROOT):
-        if (d / name).exists():
-            return d / name
-    raise FileNotFoundError(f"{name} introuvable (place-le à côté de app.py).")
-
-
-def _seed():
-    a = pd.read_excel(_find("cartographie_analysee_complete.xlsx"), sheet_name="Details_Risques", engine="openpyxl")
-    e = pd.read_excel(_find("data_reel_avec_rm.xlsx"), sheet_name="Sheet1", engine="openpyxl")
-    keep = [c for c in ["code", "processus_code", "processus_nom", "fonction", "zone_officielle",
-                        "constat", "mesures_operatoires"] if c in e.columns]
-    df = a.merge(e[keep], on="code", how="left")  # base analysée (159) = périmètre officiel
-    p = df["processus"].astype(str).str.extract(r"^(P\d+)\s*-\s*(.*)$")
-    df["processus_code"] = df["processus_code"].fillna(p[0])
-    df["processus_nom"] = df["processus_nom"].fillna(p[1])
-    df = df.rename(columns={"Criticite_Nette_Predite": "criticite_nette_predite", "Residu": "residu",
-                            "Cluster_Label": "cluster_label", "PCA1": "pca1", "PCA2": "pca2"})
-    off = df["zone_officielle"].astype(str).str.strip().str.upper()
-    ok = off.isin(ZONES)
-    df["zone"] = np.where(ok, off, zone_rule(df["criticite_brute"], df["dmr"]))
-    df["zone_source"] = np.where(ok, "officielle", "règle")
-    for c in ["fonction"]:
-        df[c] = df.get(c, "Non renseignée")
-        df[c] = df[c].fillna("Non renseignée")
-    for c in ["constat", "mesures_operatoires"]:
-        df[c] = df.get(c, "")
-        df[c] = df[c].fillna("")
-    cols = ["code", "processus_code", "processus_nom", "fonction", "sous_processus", "intitule", "prob", "grav",
-            "criticite_brute", "dmr", "criticite_nette", "zone", "zone_source", "constat", "mesures_operatoires",
-            "cluster_label", "criticite_nette_predite", "residu", "pca1", "pca2"]
-    df[cols].to_sql("risks", ENGINE, if_exists="replace", index=False)
-
-
-def _table_exists(name):
-    insp_sql = ("SELECT name FROM sqlite_master WHERE type='table' AND name=:n" if IS_SQLITE
-                else "SELECT table_name FROM information_schema.tables WHERE table_name=:n")
-    with ENGINE.connect() as c:
-        return c.execute(text(insp_sql), {"n": name}).fetchone() is not None
-
-
-def init_db():
-    with ENGINE.begin() as c:
-        for stmt in [s for s in SCHEMA.split(";") if s.strip()]:
-            c.execute(text(stmt))
-    if not _table_exists("risks"):
-        _seed()
-
-
-# ---------- utilisateurs ----------
-def _hash(pw, salt):
-    return hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 200_000).hex()
-
-
-def add_user(u, pw, role):
-    salt = secrets.token_hex(16)
-    ex("INSERT OR REPLACE INTO users VALUES(?,?,?,?,1,?)", (u, salt, _hash(pw, salt), role, now()))
-
-
-def set_user(u, role, active, pw=""):
-    ex("UPDATE users SET role=?, active=? WHERE username=?", (role, int(active), u))
-    if pw:
-        salt = secrets.token_hex(16)
-        ex("UPDATE users SET salt=?, pw=? WHERE username=?", (salt, _hash(pw, salt), u))
-
-
-def check(u, pw):
-    r = q("SELECT * FROM users WHERE username=? AND active=1", (u,))
-    if r.empty:
-        return None
-    r = r.iloc[0]
-    return r["role"] if secrets.compare_digest(_hash(pw, r["salt"]), r["pw"]) else None
-
-
-def apply_recovery():
-    """Récupération d'accès à l'admin, dans l'ordre :
-    1) Streamlit Secrets [admin] username/password -> compte recréé à CHAQUE démarrage (utile sur
-       Streamlit Cloud, dont le disque est effacé à chaque redémarrage : l'accès est donc toujours garanti).
-    2) Fichier RESET_ADMIN.txt (identifiant:motdepasse) à côté de app.py -> compte créé une fois, fichier supprimé
-       (utile en local)."""
-    try:
-        sec = st.secrets.get("admin", None)
-    except Exception:
-        sec = None
-    if sec and sec.get("username") and sec.get("password") and len(sec["password"]) >= 8:
-        u, pw = str(sec["username"]).strip(), str(sec["password"]).strip()
-        exists = not q("SELECT 1 FROM users WHERE username=?", (u,)).empty
-        add_user(u, pw, "admin")
-        if not exists:
-            log(u, "utilisateur", "création admin (secrets)", "", u)
-        return None
-
-    f = ROOT / "RESET_ADMIN.txt"
-    if not f.exists():
-        return None
-    try:
-        u, pw = f.read_text(encoding="utf-8-sig").strip().split(":", 1)
-        u, pw = u.strip(), pw.strip()
-    except ValueError:
-        f.unlink()
-        return "RESET_ADMIN.txt ignoré : format attendu  identifiant:motdepasse"
-    f.unlink()
-    if not u or len(pw) < 8:
-        return "RESET_ADMIN.txt ignoré : identifiant requis et mot de passe de 8 caractères minimum."
-    add_user(u, pw, "admin")
-    log(u, "utilisateur", "réinitialisation accès admin (fichier)", "", u)
-    return f"Accès réinitialisé : connecte-toi avec l'identifiant « {u} » et le mot de passe du fichier."
-
-
-# ---------- modification d'un risque (avec historique) ----------
-def _same(a, b):
-    try:
-        return abs(float(a) - float(b)) < 1e-9
-    except (TypeError, ValueError):
-        return str(a) == str(b)
-
-
-def update_risk(code, new, auteur):
-    old = q("SELECT * FROM risks WHERE code=?", (code,)).iloc[0]
-    new = dict(new)
-    new["criticite_brute"] = int(new["prob"]) * int(new["grav"])
-    if not (_same(old["prob"], new["prob"]) and _same(old["grav"], new["grav"]) and _same(old["dmr"], new["dmr"])):
-        new["zone"] = str(zone_rule(new["criticite_brute"], new["dmr"]))
-        new["zone_source"] = "recalculée"
-    n = 0
-    for k, v in new.items():
-        if not _same(old[k], v):
-            ex(f"UPDATE risks SET {k}=? WHERE code=?", (v, code))
-            log(auteur, code, k, old[k], v)
-            n += 1
-    return n
-
-
-# ---------- scoring (calculé sur TOUTE la base, jamais sur un filtre) ----------
-def stats_proc(df):
-    o = df.groupby("processus_code").agg(processus_nom=("processus_nom", "first"), Nb=("code", "count"),
-                                         Crit=("criticite_brute", "mean"), DMR=("dmr", "mean")).reset_index()
-    z = pd.crosstab(df["processus_code"], df["zone"]).reindex(columns=ZONES, fill_value=0)
-    p = z.div(z.sum(axis=1), axis=0) * 100
-    o["Pct_D"] = o["processus_code"].map(p["D"])
-    o["Pct_C"] = o["processus_code"].map(p["C"])
-    return o.round(2)
-
-
-def _mm(s):
-    r = s.max() - s.min()
-    return (s - s.min()) / r * 100 if r > 0 else s * 0
-
-
-def score(o, w=WEIGHTS):
-    o = o.copy()
-    o["N_D"], o["N_C"], o["N_brut"] = _mm(o["Pct_D"]), _mm(o["Pct_C"]), _mm(o["Crit"])
-    o["contrib_D"], o["contrib_C"], o["contrib_brut"] = w["D"] * o["N_D"], w["C"] * o["N_C"], w["brut"] * o["N_brut"]
-    o["Score"] = (o["contrib_D"] + o["contrib_C"] + o["contrib_brut"]).round(1)
-    o["Rang"] = o["Score"].rank(ascending=False, method="min").astype(int)
-    return o.sort_values("Rang")
-
-
-# =====================================================================
-# INTERFACE STREAMLIT
-# =====================================================================
 st.set_page_config(page_title="ORMVA-TF | Risk & Audit Center", page_icon="🛡️", layout="wide")
 st.markdown("""<style>
 .stApp{background:#F4F7F9} h1,h2,h3{color:#0F3D2E}
@@ -341,20 +29,18 @@ table.mx th{font-size:12px;color:#2E3B47;padding:4px}
 
 @st.cache_resource
 def boot():
-    init_db()
+    core.init_db()
     return True
 
 
 try:
     boot()
 except FileNotFoundError as e:
-    st.error(f"{e} Mets `cartographie_analysee_complete.xlsx` et `data_reel_avec_rm.xlsx` dans le même dossier que `app.py`, puis relance.")
+    st.error(f"{e} Copie `cartographie_analysee_complete.xlsx` et `data_reel_avec_rm.xlsx` dans `data/`, puis relance.")
     st.stop()
 
-RECOVERY_MSG = apply_recovery()
-
 # ---------- première utilisation : création de l'administrateur ----------
-if q("SELECT COUNT(*) n FROM users")["n"][0] == 0:
+if core.q("SELECT COUNT(*) n FROM users")["n"][0] == 0:
     st.title("Configuration initiale")
     st.caption("Crée le compte administrateur. Il pourra donner l'accès aux autres utilisateurs.")
     with st.form("setup"):
@@ -363,24 +49,21 @@ if q("SELECT COUNT(*) n FROM users")["n"][0] == 0:
             if not u or len(p1) < 8 or p1 != p2:
                 st.error("Identifiant requis, mot de passe de 8 caractères minimum, identique dans les deux champs.")
             else:
-                add_user(u.strip(), p1, "admin")
-                log(u, "utilisateur", "création admin", "", u)
+                core.add_user(u.strip(), p1, "admin")
+                core.log(u, "utilisateur", "création admin", "", u)
                 st.rerun()
     st.stop()
 
 # ---------- connexion ----------
 if "user" not in st.session_state:
     st.title("🛡️ ORMVA-TF · Risk & Audit Center")
-    if RECOVERY_MSG:
-        st.info(RECOVERY_MSG)
-    st.caption(f"Base de données : {DB}")
     with st.form("login"):
         u, p = st.text_input("Identifiant"), st.text_input("Mot de passe", type="password")
         if st.form_submit_button("Se connecter"):
-            role = check(u.strip(), p)
+            role = core.check(u.strip(), p)
             if role:
                 st.session_state.user, st.session_state.role = u.strip(), role
-                log(u.strip(), "session", "connexion")
+                core.log(u.strip(), "session", "connexion")
                 st.rerun()
             st.error("Identifiant ou mot de passe incorrect, ou compte désactivé.")
     st.stop()
@@ -388,9 +71,9 @@ if "user" not in st.session_state:
 ME, ADMIN = st.session_state.user, st.session_state.role == "admin"
 
 # ---------- données ----------
-df = q("SELECT * FROM risks")
-SP_ALL = stats_proc(df)
-SC_ALL = score(SP_ALL)  # score sur toute la base : les filtres n'affectent que l'affichage
+df = core.q("SELECT * FROM risks")
+SP_ALL = core.stats_proc(df)
+SC_ALL = core.score(SP_ALL)  # score sur toute la base : les filtres n'affectent que l'affichage
 PAGES = ["Tableau de bord", "Registre des risques", "Matrices", "Priorisation", "Plan d'audit",
          "Plan d'actions", "Analyses statistiques", "Historique"] + (["Administration"] if ADMIN else [])
 
@@ -401,7 +84,7 @@ with st.sidebar:
     procs = sorted(df["processus_code"].unique(), key=lambda x: int(x[1:]))
     sel = st.multiselect("Processus (affichage)", procs, default=procs) or procs
     if st.button("Se déconnecter"):
-        log(ME, "session", "déconnexion")
+        core.log(ME, "session", "déconnexion")
         st.session_state.clear()
         st.rerun()
 
@@ -426,7 +109,7 @@ st.title(page)
 
 # ================= TABLEAU DE BORD =================
 if page == "Tableau de bord":
-    act = q("SELECT statut FROM actions")
+    act = core.q("SELECT statut FROM actions")
     c = st.columns(6)
     c[0].metric("Risques", len(R))
     c[1].metric("% zone D", f"{(R.zone == 'D').mean() * 100:.1f}%")
@@ -479,7 +162,7 @@ elif page == "Registre des risques":
                 constat = st.text_area("Constat", r.constat)
                 mesures = st.text_area("Mesures opératoires", r.mesures_operatoires)
                 if st.form_submit_button("Enregistrer les modifications"):
-                    n = update_risk(code, dict(prob=prob, grav=grav, dmr=dmr, constat=constat,
+                    n = core.update_risk(code, dict(prob=prob, grav=grav, dmr=dmr, constat=constat,
                                                     mesures_operatoires=mesures), ME)
                     st.toast(f"{n} champ(s) modifié(s) — criticité et zone recalculées" if n else "Aucun changement")
                     st.rerun()
@@ -487,8 +170,8 @@ elif page == "Registre des risques":
 
 # ================= MATRICES =================
 elif page == "Matrices":
-    d = bands(R)
-    rule = zone_rule(df.criticite_brute, df.dmr)
+    d = core.bands(R)
+    rule = core.zone_rule(df.criticite_brute, df.dmr)
     off = df.zone_source == "officielle"
     st.metric("Concordance zone officielle ↔ règle (bandes du document)", f"{(rule[off] == df.zone[off]).mean() * 100:.1f}%")
     t1, t2 = st.tabs(["Risques bruts (probabilité × gravité)", "Risques nets (contrôle × criticité) — zones"])
@@ -505,8 +188,8 @@ elif page == "Matrices":
         cells = {}
         for r in d.itertuples():
             cells.setdefault((3 - r.br, r.bc), []).append(short(r.code))
-        zc = lambda i, j: ZCOL[str(zone_rule(8 if j >= 2 else 0, 1.0 if (3 - i) >= 2 else 0.0))]
-        matrix(cells, CTRL_LABELS[::-1], CRIT_LABELS, zc,
+        zc = lambda i, j: ZCOL[str(core.zone_rule(8 if j >= 2 else 0, 1.0 if (3 - i) >= 2 else 0.0))]
+        matrix(cells, core.CTRL_LABELS[::-1], core.CRIT_LABELS, zc,
                "Degré de criticité brute → · Degré de contrôle (DMR) ↑ · A optimisation · B vigilance · C surveillance · D traitement")
 
 # ================= PRIORISATION =================
@@ -534,8 +217,8 @@ elif page == "Priorisation":
         st.dataframe(cmp.rename(columns={"Rang": "Rang Sp"}), width="stretch", hide_index=True)
         base = SC_ALL.set_index("processus_code")["Rang"]
         rows, ranks = [], pd.DataFrame(index=base.index)
-        for n, w in SCENARIOS.items():
-            rk = score(SP_ALL, w).set_index("processus_code")["Rang"]
+        for n, w in core.SCENARIOS.items():
+            rk = core.score(SP_ALL, w).set_index("processus_code")["Rang"]
             ranks[n] = rk
             if n != "Base":
                 rho, p = stats.spearmanr(base, rk.reindex(base.index))
@@ -553,7 +236,7 @@ elif page == "Plan d'audit":
     st.dataframe(top[["Rang", "processus_code", "processus_nom", "Score"]], width="stretch", hide_index=True)
     p = df[df.processus_code.isin(top.processus_code) & df.zone.isin(zs)].copy()
     p["Rang_processus"] = p["processus_code"].map(SC_ALL.set_index("processus_code")["Rang"])
-    p["zsev"] = p["zone"].map(ZSEV)
+    p["zsev"] = p["zone"].map(core.ZSEV)
     p = p.sort_values(["Rang_processus", "zsev", "criticite_brute", "dmr"], ascending=[True, False, False, True])
     out = p[["Rang_processus", "processus_code", "code", "intitule", "zone", "criticite_brute", "dmr", "cluster_label", "constat", "mesures_operatoires"]]
     st.markdown(f"**{len(out)} risques à couvrir** (par processus, zone la plus sévère, criticité décroissante, contrôle croissant)")
@@ -562,7 +245,7 @@ elif page == "Plan d'audit":
 
 # ================= PLAN D'ACTIONS =================
 elif page == "Plan d'actions":
-    A = q("SELECT * FROM actions ORDER BY id DESC")
+    A = core.q("SELECT * FROM actions ORDER BY id DESC")
     st.dataframe(A, width="stretch", hide_index=True)
     if len(A):
         dl(A, "plan_actions.csv")
@@ -576,9 +259,9 @@ elif page == "Plan d'actions":
             resp, ech = c[0].text_input("Responsable"), c[1].date_input("Échéance")
             stt = c[2].selectbox("Statut", ["À lancer", "En cours", "Terminée", "Bloquée"])
             if st.form_submit_button("Ajouter l'action") and txt:
-                ex("INSERT INTO actions(code,action,responsable,echeance,statut,maj) VALUES(?,?,?,?,?,?)",
-                        (code, txt, resp, str(ech), stt, now()))
-                log(ME, code, "action ajoutée", "", txt[:80])
+                core.ex("INSERT INTO actions(code,action,responsable,echeance,statut,maj) VALUES(?,?,?,?,?,?)",
+                        (code, txt, resp, str(ech), stt, core.now()))
+                core.log(ME, code, "action ajoutée", "", txt[:80])
                 st.rerun()
         if len(A):
             st.markdown("#### Mettre à jour / supprimer")
@@ -586,12 +269,12 @@ elif page == "Plan d'actions":
             aid = c[0].selectbox("Action n°", A["id"])
             ns = c[1].selectbox("Nouveau statut", ["À lancer", "En cours", "Terminée", "Bloquée"])
             if c[1].button("Mettre à jour le statut"):
-                ex("UPDATE actions SET statut=?, maj=? WHERE id=?", (ns, now(), int(aid)))
-                log(ME, f"action {aid}", "statut", A.loc[A.id == aid, "statut"].iloc[0], ns)
+                core.ex("UPDATE actions SET statut=?, maj=? WHERE id=?", (ns, core.now(), int(aid)))
+                core.log(ME, f"action {aid}", "statut", A.loc[A.id == aid, "statut"].iloc[0], ns)
                 st.rerun()
             if c[2].button("Supprimer cette action"):
-                ex("DELETE FROM actions WHERE id=?", (int(aid),))
-                log(ME, f"action {aid}", "suppression")
+                core.ex("DELETE FROM actions WHERE id=?", (int(aid),))
+                core.log(ME, f"action {aid}", "suppression")
                 st.rerun()
 
 # ================= ANALYSES =================
@@ -609,7 +292,7 @@ elif page == "Analyses statistiques":
         else:
             st.warning("Sélectionne au moins deux processus.")
     with t2:
-        v = R.assign(zs=R.zone.map(ZSEV), nd=R.criticite_brute * (1 - R.dmr))
+        v = R.assign(zs=R.zone.map(core.ZSEV), nd=R.criticite_brute * (1 - R.dmr))
         rows = [{"Variable": lb, "Spearman ρ vs sévérité zone": round(stats.spearmanr(v[c], v.zs)[0], 3)}
                 for c, lb in [("criticite_nette", "Criticité nette déclarée"), ("nd", "Criticité nette diagnostique brute×(1−DMR)"), ("criticite_brute", "Criticité brute")]]
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
@@ -624,7 +307,7 @@ elif page == "Analyses statistiques":
 
 # ================= HISTORIQUE =================
 elif page == "Historique":
-    h = q("SELECT * FROM history ORDER BY id DESC LIMIT 2000")
+    h = core.q("SELECT * FROM history ORDER BY id DESC LIMIT 2000")
     s = st.text_input("Filtrer (utilisateur, objet, champ)")
     if s:
         h = h[h.apply(lambda r: s.lower() in " ".join(map(str, r.values)).lower(), axis=1)]
@@ -633,7 +316,7 @@ elif page == "Historique":
 
 # ================= ADMINISTRATION =================
 elif page == "Administration" and ADMIN:
-    U = q("SELECT username, role, active, created FROM users")
+    U = core.q("SELECT username, role, active, created FROM users")
     st.dataframe(U, width="stretch", hide_index=True)
     st.markdown("#### Donner l'accès à un utilisateur")
     with st.form("nu"):
@@ -641,7 +324,7 @@ elif page == "Administration" and ADMIN:
         u, pw, ro = c[0].text_input("Identifiant"), c[1].text_input("Mot de passe initial (8 min.)", type="password"), c[2].selectbox("Rôle", ["lecteur", "admin"])
         if st.form_submit_button("Créer l'utilisateur"):
             if u and len(pw) >= 8 and u not in U.username.values:
-                add_user(u.strip(), pw, ro); log(ME, "utilisateur", "création", "", f"{u} ({ro})"); st.rerun()
+                core.add_user(u.strip(), pw, ro); core.log(ME, "utilisateur", "création", "", f"{u} ({ro})"); st.rerun()
             else:
                 st.error("Identifiant unique requis et mot de passe de 8 caractères minimum.")
     st.markdown("#### Modifier / retirer l'accès")
@@ -654,4 +337,4 @@ elif page == "Administration" and ADMIN:
             if pw and len(pw) < 8:
                 st.error("Mot de passe trop court.")
             else:
-                set_user(u, ro, ac, pw); log(ME, "utilisateur", "modification", u, f"{ro}, actif={ac}"); st.rerun()
+                core.set_user(u, ro, ac, pw); core.log(ME, "utilisateur", "modification", u, f"{ro}, actif={ac}"); st.rerun()
