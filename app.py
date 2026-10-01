@@ -36,7 +36,26 @@ def _db_url():
 
 
 DB_URL = _db_url()
-ENGINE = create_engine(DB_URL, pool_pre_ping=True)
+try:
+    ENGINE = create_engine(DB_URL, pool_pre_ping=True)
+except Exception as e:
+    masked = DB_URL
+    if "@" in masked and "://" in masked:
+        head, tail = masked.split("://", 1)
+        if "@" in tail:
+            creds, rest = tail.split("@", 1)
+            user = creds.split(":", 1)[0] if ":" in creds else creds
+            masked = f"{head}://{user}:****@{rest}"
+    st.error(
+        "⚠️ Le secret DATABASE_URL n'est pas une URL de connexion valide.\n\n"
+        f"**Valeur lue (mot de passe masqué)** : `{masked}`\n\n"
+        f"**Erreur technique** : {e}\n\n"
+        "Vérifie dans Settings → Secrets : le format doit être exactement\n"
+        "`postgresql://postgres.xxxx:MOTDEPASSE@hote:5432/postgres` (sans crochets `[ ]`, "
+        "entre guillemets, sur une seule ligne), et le mot de passe ne doit contenir ni espace ni "
+        "caractère spécial (`@ : / ? # %`)."
+    )
+    st.stop()
 IS_SQLITE = ENGINE.dialect.name == "sqlite"
 DB = DB_URL if not IS_SQLITE else str(ROOT / "ormvatf.db")
 ZONES = ["A", "B", "C", "D"]
