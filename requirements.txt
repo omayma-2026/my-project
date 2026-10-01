@@ -1,5 +1,8 @@
-streamlit
+streamlit>=1.50
 pandas
+numpy
 plotly
 scipy
 openpyxl
+sqlalchemy>=2.0
+psycopg2-binary
