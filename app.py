@@ -2,7 +2,7 @@
 Fichier unique. Placer à côté de app.py : cartographie_analysee_complete.xlsx et data_reel_avec_rm.xlsx.
 Dépendances : streamlit pandas numpy plotly scipy openpyxl
 """
-import hashlib, os, secrets, sqlite3
+import hashlib, os, secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -11,12 +11,34 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from scipy import stats
+from sqlalchemy import create_engine, text
 
 # =====================================================================
 # COUCHE DONNÉES : SQLite, authentification, historique, calculs
 # =====================================================================
 ROOT = Path(__file__).parent
-DB = Path(os.getenv("ORMVATF_DB", ROOT / "ormvatf.db"))
+
+
+def _db_url():
+    """URL de connexion à la base. Priorité :
+    1) secret Streamlit DATABASE_URL (base Postgres persistante, ex. Supabase/Neon gratuit) -> jamais effacée,
+       même sur un hébergement à disque éphémère (Streamlit Community Cloud).
+    2) variable d'environnement ORMVATF_DB_URL.
+    3) fichier SQLite local à côté de app.py (persistant tant que le disque local l'est, ex. ton PC)."""
+    try:
+        u = st.secrets.get("DATABASE_URL", "")
+    except Exception:
+        u = ""
+    u = u or os.getenv("ORMVATF_DB_URL", "")
+    if u:
+        return u
+    return f"sqlite:///{ROOT / 'ormvatf.db'}"
+
+
+DB_URL = _db_url()
+ENGINE = create_engine(DB_URL, pool_pre_ping=True)
+IS_SQLITE = ENGINE.dialect.name == "sqlite"
+DB = DB_URL if not IS_SQLITE else str(ROOT / "ormvatf.db")
 ZONES = ["A", "B", "C", "D"]
 ZSEV = {"A": 1, "B": 2, "C": 3, "D": 4}
 ZCOL = {"A": "#2E7D4F", "B": "#D9A441", "C": "#E08E45", "D": "#C0392B"}
@@ -33,29 +55,39 @@ SCENARIOS = {
     "Dominant brut": {"D": 0.25, "C": 0.25, "brut": 0.50},
     "Équilibre": {"D": 1 / 3, "C": 1 / 3, "brut": 1 / 3},
 }
-SCHEMA = """
+AUTOINC = "INTEGER PRIMARY KEY AUTOINCREMENT" if IS_SQLITE else "SERIAL PRIMARY KEY"
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, salt TEXT, pw TEXT, role TEXT, active INTEGER DEFAULT 1, created TEXT);
-CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, auteur TEXT, obj TEXT, champ TEXT, ancien TEXT, nouveau TEXT);
-CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, action TEXT, responsable TEXT, echeance TEXT, statut TEXT, maj TEXT);
+CREATE TABLE IF NOT EXISTS history(id {AUTOINC}, ts TEXT, auteur TEXT, obj TEXT, champ TEXT, ancien TEXT, nouveau TEXT);
+CREATE TABLE IF NOT EXISTS actions(id {AUTOINC}, code TEXT, action TEXT, responsable TEXT, echeance TEXT, statut TEXT, maj TEXT);
 """
 now = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _prep(sql, p):
+    """Convertit les '?' positionnels (style sqlite3) en paramètres nommés SQLAlchemy, pour que le
+    même code SQL fonctionne avec SQLite (local) ou Postgres (base distante persistante)."""
+    parts = sql.split("?")
+    if len(parts) == 1:
+        return text(sql), {}
+    out, d = parts[0], {}
+    for i, part in enumerate(parts[1:]):
+        k = f"p{i}"
+        d[k] = p[i]
+        out += f":{k}" + part
+    return text(out), d
+
+
 def q(sql, p=()):
-    c = sqlite3.connect(DB)
-    try:
-        return pd.read_sql_query(sql, c, params=p)
-    finally:
-        c.close()
+    stmt, d = _prep(sql, p)
+    with ENGINE.connect() as c:
+        return pd.read_sql_query(stmt, c, params=d)
 
 
 def ex(sql, p=()):
-    c = sqlite3.connect(DB)
-    try:
-        c.execute(sql, p)
-        c.commit()
-    finally:
-        c.close()
+    stmt, d = _prep(sql, p)
+    with ENGINE.begin() as c:
+        c.execute(stmt, d)
 
 
 def log(auteur, obj, champ, old="", new=""):
@@ -110,18 +142,21 @@ def _seed():
     cols = ["code", "processus_code", "processus_nom", "fonction", "sous_processus", "intitule", "prob", "grav",
             "criticite_brute", "dmr", "criticite_nette", "zone", "zone_source", "constat", "mesures_operatoires",
             "cluster_label", "criticite_nette_predite", "residu", "pca1", "pca2"]
-    c = sqlite3.connect(DB)
-    df[cols].to_sql("risks", c, if_exists="replace", index=False)
-    c.close()
+    df[cols].to_sql("risks", ENGINE, if_exists="replace", index=False)
+
+
+def _table_exists(name):
+    insp_sql = ("SELECT name FROM sqlite_master WHERE type='table' AND name=:n" if IS_SQLITE
+                else "SELECT table_name FROM information_schema.tables WHERE table_name=:n")
+    with ENGINE.connect() as c:
+        return c.execute(text(insp_sql), {"n": name}).fetchone() is not None
 
 
 def init_db():
-    c = sqlite3.connect(DB)
-    c.executescript(SCHEMA)
-    c.commit()
-    has = c.execute("SELECT name FROM sqlite_master WHERE name='risks'").fetchone()
-    c.close()
-    if not has:
+    with ENGINE.begin() as c:
+        for stmt in [s for s in SCHEMA.split(";") if s.strip()]:
+            c.execute(text(stmt))
+    if not _table_exists("risks"):
         _seed()
 
 
@@ -151,8 +186,23 @@ def check(u, pw):
 
 
 def apply_recovery():
-    """Récupération d'accès : si un fichier RESET_ADMIN.txt (contenu  identifiant:motdepasse) existe à côté de
-    app.py, ce compte est (re)créé en administrateur avec ce mot de passe, puis le fichier est supprimé."""
+    """Récupération d'accès à l'admin, dans l'ordre :
+    1) Streamlit Secrets [admin] username/password -> compte recréé à CHAQUE démarrage (utile sur
+       Streamlit Cloud, dont le disque est effacé à chaque redémarrage : l'accès est donc toujours garanti).
+    2) Fichier RESET_ADMIN.txt (identifiant:motdepasse) à côté de app.py -> compte créé une fois, fichier supprimé
+       (utile en local)."""
+    try:
+        sec = st.secrets.get("admin", None)
+    except Exception:
+        sec = None
+    if sec and sec.get("username") and sec.get("password") and len(sec["password"]) >= 8:
+        u, pw = str(sec["username"]).strip(), str(sec["password"]).strip()
+        exists = not q("SELECT 1 FROM users WHERE username=?", (u,)).empty
+        add_user(u, pw, "admin")
+        if not exists:
+            log(u, "utilisateur", "création admin (secrets)", "", u)
+        return None
+
     f = ROOT / "RESET_ADMIN.txt"
     if not f.exists():
         return None
@@ -166,7 +216,7 @@ def apply_recovery():
     if not u or len(pw) < 8:
         return "RESET_ADMIN.txt ignoré : identifiant requis et mot de passe de 8 caractères minimum."
     add_user(u, pw, "admin")
-    log(u, "utilisateur", "réinitialisation accès admin", "", u)
+    log(u, "utilisateur", "réinitialisation accès admin (fichier)", "", u)
     return f"Accès réinitialisé : connecte-toi avec l'identifiant « {u} » et le mot de passe du fichier."
 
 
