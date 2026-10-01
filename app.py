@@ -12,6 +12,7 @@ import plotly.express as px
 import streamlit as st
 from scipy import stats
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL, make_url
 
 # =====================================================================
 # COUCHE DONNÉES : SQLite, authentification, historique, calculs
@@ -19,43 +20,80 @@ from sqlalchemy import create_engine, text
 ROOT = Path(__file__).parent
 
 
+def _secret(path, default=None):
+    """Lecture tolérante d'un secret Streamlit : ne plante jamais, même si aucun secrets.toml
+    n'existe du tout (cas d'un lancement local sans configuration)."""
+    try:
+        v = st.secrets
+        for p in path:
+            v = v[p]
+        return v
+    except Exception:
+        return default
+
+
 def _db_url():
     """URL de connexion à la base. Priorité :
-    1) secret Streamlit DATABASE_URL (base Postgres persistante, ex. Supabase/Neon gratuit) -> jamais effacée,
-       même sur un hébergement à disque éphémère (Streamlit Community Cloud).
-    2) variable d'environnement ORMVATF_DB_URL.
-    3) fichier SQLite local à côté de app.py (persistant tant que le disque local l'est, ex. ton PC)."""
-    try:
-        u = st.secrets.get("DATABASE_URL", "")
-    except Exception:
-        u = ""
-    u = u or os.getenv("ORMVATF_DB_URL", "")
+    1) secret Streamlit [database] host/port/user/password/dbname -> assemblée ici de façon sûre
+       (le mot de passe peut contenir n'importe quel caractère, aucun encodage manuel requis).
+    2) secret Streamlit DATABASE_URL (chaîne déjà assemblée, ex. copiée telle quelle depuis Supabase).
+    3) variable d'environnement ORMVATF_DB_URL.
+    4) fichier SQLite local à côté de app.py (persistant tant que le disque local l'est, ex. ton PC).
+    Une base Postgres (Supabase/Neon...) n'est, contrairement au fichier SQLite local, jamais effacée
+    sur un hébergement à disque éphémère (Streamlit Community Cloud)."""
+    d = _secret(["database"])
+    if d and d.get("host") and d.get("user") and d.get("password"):
+        return URL.create(
+            "postgresql+psycopg2",
+            username=str(d["user"]),
+            password=str(d["password"]),
+            host=str(d["host"]),
+            port=int(d.get("port", 5432)),
+            database=str(d.get("dbname", "postgres")),
+        )
+
+    u = _secret(["DATABASE_URL"], "") or os.getenv("ORMVATF_DB_URL", "")
     if u:
-        return u
+        url = make_url(u)
+        if url.drivername == "postgresql":  # force le pilote psycopg2 (installé via requirements.txt) ;
+            url = url.set(drivername="postgresql+psycopg2")  # sans ça, certaines versions de SQLAlchemy
+        return url                                           # essaient 'psycopg' (v3), non installé.
     return f"sqlite:///{ROOT / 'ormvatf.db'}"
+
+
+def _mask(u):
+    s = u.render_as_string(hide_password=True) if hasattr(u, "render_as_string") else str(u)
+    if "@" in s and "://" in s and "***" not in s:
+        head, tail = s.split("://", 1)
+        if "@" in tail:
+            creds, rest = tail.split("@", 1)
+            user = creds.split(":", 1)[0] if ":" in creds else creds
+            s = f"{head}://{user}:****@{rest}"
+    return s
+
+
+def _connection_help(e):
+    st.error(
+        "⚠️ Impossible de se connecter à la base de données.\n\n"
+        f"**Connexion lue (mot de passe masqué)** : `{_mask(DB_URL)}`\n\n"
+        f"**Erreur technique** : {e}\n\n"
+        "Le plus fiable dans Settings → Secrets : des champs séparés, sans aucun encodage à faire "
+        "sur le mot de passe (il peut contenir n'importe quel caractère) :\n"
+        "```\n[database]\nhost = \"aws-1-eu-west-1.pooler.supabase.com\"\nport = 6543\n"
+        "user = \"postgres.xxxx\"\npassword = \"TonMotDePasse\"\ndbname = \"postgres\"\n```\n\n"
+        "Vérifie aussi, dans Supabase : le projet est actif (pas en pause), le mot de passe est "
+        "correct, et `requirements.txt` contient bien `sqlalchemy` et `psycopg2-binary`."
+    )
+    st.stop()
 
 
 DB_URL = _db_url()
 try:
     ENGINE = create_engine(DB_URL, pool_pre_ping=True)
+    with ENGINE.connect():
+        pass  # vérifie une vraie connexion maintenant, pas seulement le format de l'URL
 except Exception as e:
-    masked = DB_URL
-    if "@" in masked and "://" in masked:
-        head, tail = masked.split("://", 1)
-        if "@" in tail:
-            creds, rest = tail.split("@", 1)
-            user = creds.split(":", 1)[0] if ":" in creds else creds
-            masked = f"{head}://{user}:****@{rest}"
-    st.error(
-        "⚠️ Le secret DATABASE_URL n'est pas une URL de connexion valide.\n\n"
-        f"**Valeur lue (mot de passe masqué)** : `{masked}`\n\n"
-        f"**Erreur technique** : {e}\n\n"
-        "Vérifie dans Settings → Secrets : le format doit être exactement\n"
-        "`postgresql://postgres.xxxx:MOTDEPASSE@hote:5432/postgres` (sans crochets `[ ]`, "
-        "entre guillemets, sur une seule ligne), et le mot de passe ne doit contenir ni espace ni "
-        "caractère spécial (`@ : / ? # %`)."
-    )
-    st.stop()
+    _connection_help(e)
 IS_SQLITE = ENGINE.dialect.name == "sqlite"
 DB = DB_URL if not IS_SQLITE else str(ROOT / "ormvatf.db")
 ZONES = ["A", "B", "C", "D"]
