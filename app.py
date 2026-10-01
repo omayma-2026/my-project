@@ -39,54 +39,22 @@ except FileNotFoundError as e:
     st.error(f"{e} Copie `cartographie_analysee_complete.xlsx` et `data_reel_avec_rm.xlsx` dans `data/`, puis relance.")
     st.stop()
 
-# ---------- première utilisation : création de l'administrateur ----------
-if core.q("SELECT COUNT(*) n FROM users")["n"][0] == 0:
-    st.title("Configuration initiale")
-    st.caption("Crée le compte administrateur. Il pourra donner l'accès aux autres utilisateurs.")
-    with st.form("setup"):
-        u, p1, p2 = st.text_input("Identifiant"), st.text_input("Mot de passe (8 caractères min.)", type="password"), st.text_input("Confirmer", type="password")
-        if st.form_submit_button("Créer le compte administrateur"):
-            if not u or len(p1) < 8 or p1 != p2:
-                st.error("Identifiant requis, mot de passe de 8 caractères minimum, identique dans les deux champs.")
-            else:
-                core.add_user(u.strip(), p1, "admin")
-                core.log(u, "utilisateur", "création admin", "", u)
-                st.rerun()
-    st.stop()
-
-# ---------- connexion ----------
-if "user" not in st.session_state:
-    st.title("🛡️ ORMVA-TF · Risk & Audit Center")
-    with st.form("login"):
-        u, p = st.text_input("Identifiant"), st.text_input("Mot de passe", type="password")
-        if st.form_submit_button("Se connecter"):
-            role = core.check(u.strip(), p)
-            if role:
-                st.session_state.user, st.session_state.role = u.strip(), role
-                core.log(u.strip(), "session", "connexion")
-                st.rerun()
-            st.error("Identifiant ou mot de passe incorrect, ou compte désactivé.")
-    st.stop()
-
-ME, ADMIN = st.session_state.user, st.session_state.role == "admin"
+# ---------- accès direct (sans connexion) : session administrateur ----------
+ME, ADMIN = "admin", True
 
 # ---------- données ----------
 df = core.q("SELECT * FROM risks")
 SP_ALL = core.stats_proc(df)
 SC_ALL = core.score(SP_ALL)  # score sur toute la base : les filtres n'affectent que l'affichage
 PAGES = ["Tableau de bord", "Registre des risques", "Matrices", "Priorisation", "Plan d'audit",
-         "Plan d'actions", "Analyses statistiques", "Historique"] + (["Administration"] if ADMIN else [])
+         "Plan d'actions", "Analyses statistiques", "Historique"]
 
 with st.sidebar:
     st.markdown("### 🛡️ ORMVA-TF")
-    st.caption(f"{ME} · {'administrateur' if ADMIN else 'lecteur (consultation)'}")
+    st.caption("Mode administrateur")
     page = st.radio("Navigation", PAGES, label_visibility="collapsed")
     procs = sorted(df["processus_code"].unique(), key=lambda x: int(x[1:]))
     sel = st.multiselect("Processus (affichage)", procs, default=procs) or procs
-    if st.button("Se déconnecter"):
-        core.log(ME, "session", "déconnexion")
-        st.session_state.clear()
-        st.rerun()
 
 R = df[df["processus_code"].isin(sel)]
 SC = SC_ALL[SC_ALL["processus_code"].isin(sel)]
@@ -147,26 +115,21 @@ elif page == "Registre des risques":
         r = df[df.code == code].iloc[0]
         st.markdown(f"**{r.code} · {r.intitule}**")
         st.caption(f"{r.processus_code} — {r.processus_nom} · {r.sous_processus} · zone {r.zone} ({r.zone_source})")
-        if not ADMIN:
-            x, y = st.columns(2)
-            x.markdown("**Constat**"); x.write(r.constat or "—")
-            y.markdown("**Mesures opératoires**"); y.write(r.mesures_operatoires or "—")
-        else:
-            with st.form("edit"):
-                e = st.columns(3)
-                prob = e[0].select_slider("Probabilité", [1, 2, 3, 4], int(r.prob))
-                grav = e[1].select_slider("Gravité", [1, 2, 3, 4], int(r.grav))
-                opts = [0.0, 0.25, 0.5, 0.75, 1.0]
-                dmr = e[2].select_slider("DMR (degré de contrôle)", opts, min(opts, key=lambda o: abs(o - r.dmr)),
-                                         format_func=lambda o: f"{o:.0%}")
-                constat = st.text_area("Constat", r.constat)
-                mesures = st.text_area("Mesures opératoires", r.mesures_operatoires)
-                if st.form_submit_button("Enregistrer les modifications"):
-                    n = core.update_risk(code, dict(prob=prob, grav=grav, dmr=dmr, constat=constat,
-                                                    mesures_operatoires=mesures), ME)
-                    st.toast(f"{n} champ(s) modifié(s) — criticité et zone recalculées" if n else "Aucun changement")
-                    st.rerun()
-            st.caption("La criticité brute et la zone (règle du document) sont recalculées à chaque modification de prob., grav. ou DMR. Tout est tracé dans l'historique.")
+        with st.form("edit"):
+            e = st.columns(3)
+            prob = e[0].select_slider("Probabilité", [1, 2, 3, 4], int(r.prob))
+            grav = e[1].select_slider("Gravité", [1, 2, 3, 4], int(r.grav))
+            opts = [0.0, 0.25, 0.5, 0.75, 1.0]
+            dmr = e[2].select_slider("DMR (degré de contrôle)", opts, min(opts, key=lambda o: abs(o - r.dmr)),
+                                     format_func=lambda o: f"{o:.0%}")
+            constat = st.text_area("Constat", r.constat)
+            mesures = st.text_area("Mesures opératoires", r.mesures_operatoires)
+            if st.form_submit_button("Enregistrer les modifications"):
+                n = core.update_risk(code, dict(prob=prob, grav=grav, dmr=dmr, constat=constat,
+                                                mesures_operatoires=mesures), ME)
+                st.toast(f"{n} champ(s) modifié(s) — criticité et zone recalculées" if n else "Aucun changement")
+                st.rerun()
+        st.caption("La criticité brute et la zone (règle du document) sont recalculées à chaque modification de prob., grav. ou DMR. Tout est tracé dans l'historique.")
 
 # ================= MATRICES =================
 elif page == "Matrices":
@@ -249,33 +212,32 @@ elif page == "Plan d'actions":
     st.dataframe(A, width="stretch", hide_index=True)
     if len(A):
         dl(A, "plan_actions.csv")
-    if ADMIN:
-        st.markdown("#### Nouvelle action")
-        code = st.selectbox("Risque concerné", df.sort_values("criticite_brute", ascending=False)["code"])
-        prop = df.loc[df.code == code, "mesures_operatoires"].iloc[0]
-        with st.form("act"):
-            txt = st.text_area("Action", prop, key=f"a_{code}")
-            c = st.columns(3)
-            resp, ech = c[0].text_input("Responsable"), c[1].date_input("Échéance")
-            stt = c[2].selectbox("Statut", ["À lancer", "En cours", "Terminée", "Bloquée"])
-            if st.form_submit_button("Ajouter l'action") and txt:
-                core.ex("INSERT INTO actions(code,action,responsable,echeance,statut,maj) VALUES(?,?,?,?,?,?)",
-                        (code, txt, resp, str(ech), stt, core.now()))
-                core.log(ME, code, "action ajoutée", "", txt[:80])
-                st.rerun()
-        if len(A):
-            st.markdown("#### Mettre à jour / supprimer")
-            c = st.columns(3)
-            aid = c[0].selectbox("Action n°", A["id"])
-            ns = c[1].selectbox("Nouveau statut", ["À lancer", "En cours", "Terminée", "Bloquée"])
-            if c[1].button("Mettre à jour le statut"):
-                core.ex("UPDATE actions SET statut=?, maj=? WHERE id=?", (ns, core.now(), int(aid)))
-                core.log(ME, f"action {aid}", "statut", A.loc[A.id == aid, "statut"].iloc[0], ns)
-                st.rerun()
-            if c[2].button("Supprimer cette action"):
-                core.ex("DELETE FROM actions WHERE id=?", (int(aid),))
-                core.log(ME, f"action {aid}", "suppression")
-                st.rerun()
+    st.markdown("#### Nouvelle action")
+    code = st.selectbox("Risque concerné", df.sort_values("criticite_brute", ascending=False)["code"])
+    prop = df.loc[df.code == code, "mesures_operatoires"].iloc[0]
+    with st.form("act"):
+        txt = st.text_area("Action", prop, key=f"a_{code}")
+        c = st.columns(3)
+        resp, ech = c[0].text_input("Responsable"), c[1].date_input("Échéance")
+        stt = c[2].selectbox("Statut", ["À lancer", "En cours", "Terminée", "Bloquée"])
+        if st.form_submit_button("Ajouter l'action") and txt:
+            core.ex("INSERT INTO actions(code,action,responsable,echeance,statut,maj) VALUES(?,?,?,?,?,?)",
+                    (code, txt, resp, str(ech), stt, core.now()))
+            core.log(ME, code, "action ajoutée", "", txt[:80])
+            st.rerun()
+    if len(A):
+        st.markdown("#### Mettre à jour / supprimer")
+        c = st.columns(3)
+        aid = c[0].selectbox("Action n°", A["id"])
+        ns = c[1].selectbox("Nouveau statut", ["À lancer", "En cours", "Terminée", "Bloquée"])
+        if c[1].button("Mettre à jour le statut"):
+            core.ex("UPDATE actions SET statut=?, maj=? WHERE id=?", (ns, core.now(), int(aid)))
+            core.log(ME, f"action {aid}", "statut", A.loc[A.id == aid, "statut"].iloc[0], ns)
+            st.rerun()
+        if c[2].button("Supprimer cette action"):
+            core.ex("DELETE FROM actions WHERE id=?", (int(aid),))
+            core.log(ME, f"action {aid}", "suppression")
+            st.rerun()
 
 # ================= ANALYSES =================
 elif page == "Analyses statistiques":
@@ -313,28 +275,3 @@ elif page == "Historique":
         h = h[h.apply(lambda r: s.lower() in " ".join(map(str, r.values)).lower(), axis=1)]
     st.dataframe(h, width="stretch", hide_index=True)
     dl(h, "historique.csv")
-
-# ================= ADMINISTRATION =================
-elif page == "Administration" and ADMIN:
-    U = core.q("SELECT username, role, active, created FROM users")
-    st.dataframe(U, width="stretch", hide_index=True)
-    st.markdown("#### Donner l'accès à un utilisateur")
-    with st.form("nu"):
-        c = st.columns(3)
-        u, pw, ro = c[0].text_input("Identifiant"), c[1].text_input("Mot de passe initial (8 min.)", type="password"), c[2].selectbox("Rôle", ["lecteur", "admin"])
-        if st.form_submit_button("Créer l'utilisateur"):
-            if u and len(pw) >= 8 and u not in U.username.values:
-                core.add_user(u.strip(), pw, ro); core.log(ME, "utilisateur", "création", "", f"{u} ({ro})"); st.rerun()
-            else:
-                st.error("Identifiant unique requis et mot de passe de 8 caractères minimum.")
-    st.markdown("#### Modifier / retirer l'accès")
-    with st.form("mu"):
-        c = st.columns(4)
-        u = c[0].selectbox("Utilisateur", [x for x in U.username if x != ME])
-        ro, ac = c[1].selectbox("Rôle", ["lecteur", "admin"]), c[2].checkbox("Compte actif", True)
-        pw = c[3].text_input("Nouveau mot de passe (optionnel)", type="password")
-        if st.form_submit_button("Appliquer") and u:
-            if pw and len(pw) < 8:
-                st.error("Mot de passe trop court.")
-            else:
-                core.set_user(u, ro, ac, pw); core.log(ME, "utilisateur", "modification", u, f"{ro}, actif={ac}"); st.rerun()
