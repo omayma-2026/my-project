@@ -18,12 +18,63 @@ except ModuleNotFoundError:
 from core import ZCOL, ZONES
 
 st.set_page_config(page_title="ORMVA-TF | Risk & Audit Center", page_icon="🛡️", layout="wide")
+import plotly.io as pio
+pio.templates.default = "plotly_white"
+px.defaults.color_discrete_sequence = ["#0F5C3A", "#C9A227", "#2E8B6A", "#B5651D", "#5B8DB8", "#8C6D46"]
+
 st.markdown("""<style>
-.stApp{background:#F4F7F9} h1,h2,h3{color:#0F3D2E}
-div[data-testid=stMetric]{background:#fff;border-left:4px solid #0F3D2E;border-radius:8px;padding:10px 16px}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"], .stApp {font-family:'Inter',sans-serif;}
+.stApp{background:#F6F4EE}
+#MainMenu, footer {visibility:hidden}
+header[data-testid=stHeader]{background:transparent}
+.block-container{padding-top:1.4rem;max-width:1400px}
+h1,h2,h3,h4{color:#0B3B2A;font-weight:700;letter-spacing:-.2px}
+
+/* --- bannière --- */
+.hero{background:linear-gradient(120deg,#0B3B2A 0%,#146C43 65%,#1E8A57 100%);border-radius:14px;padding:22px 30px;
+      margin-bottom:22px;display:flex;justify-content:space-between;align-items:center;border-bottom:4px solid #C9A227;
+      box-shadow:0 4px 14px rgba(11,59,42,.18)}
+.hero h1{color:#fff!important;margin:0;font-size:1.65rem}
+.hero p{color:#E4D9AE;margin:4px 0 0;font-size:.85rem;letter-spacing:.4px}
+.hero .tag{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(201,162,39,.6);padding:6px 14px;
+           border-radius:20px;font-size:.78rem;font-weight:600;white-space:nowrap}
+
+/* --- sidebar --- */
+section[data-testid=stSidebar]{background:linear-gradient(180deg,#0B3B2A 0%,#0F4D35 100%);border-right:3px solid #C9A227}
+section[data-testid=stSidebar] h3, section[data-testid=stSidebar] p, section[data-testid=stSidebar] label,
+section[data-testid=stSidebar] span, section[data-testid=stSidebar] .stCaption{color:#F1EBD2!important}
+section[data-testid=stSidebar] [data-baseweb=select] *{color:#0B3B2A!important}
+section[data-testid=stSidebar] div[role=radiogroup] label{padding:7px 10px;border-radius:8px;transition:.15s}
+section[data-testid=stSidebar] div[role=radiogroup] label:hover{background:rgba(255,255,255,.10)}
+.brand{text-align:center;padding:6px 0 14px;border-bottom:1px solid rgba(201,162,39,.45);margin-bottom:12px}
+.brand .logo{font-size:2.3rem}
+.brand .t{color:#fff;font-weight:700;font-size:1.15rem;letter-spacing:1px}
+.brand .s{color:#C9A227;font-size:.7rem;letter-spacing:.8px;text-transform:uppercase}
+
+/* --- cartes KPI --- */
+div[data-testid=stMetric]{background:#fff;border:1px solid #E6E1D1;border-left:5px solid #0F5C3A;border-radius:12px;
+                          padding:12px 16px;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+div[data-testid=stMetric] label p{color:#6B6B5E!important;font-size:.78rem!important;font-weight:600}
+div[data-testid=stMetricValue]{color:#0B3B2A;font-weight:700}
+
+/* --- onglets, boutons, tableaux --- */
+button[data-baseweb=tab]{font-weight:600;color:#4B5B52}
+button[data-baseweb=tab][aria-selected=true]{color:#0F5C3A}
+div[data-baseweb=tab-highlight]{background:#C9A227!important}
+.stButton>button, .stDownloadButton>button, div[data-testid=stFormSubmitButton]>button{
+    background:#0F5C3A;color:#fff;border:0;border-radius:8px;font-weight:600;padding:.45rem 1.1rem}
+.stButton>button:hover, .stDownloadButton>button:hover, div[data-testid=stFormSubmitButton]>button:hover{
+    background:#C9A227;color:#0B3B2A}
+div[data-testid=stDataFrame]{border:1px solid #E6E1D1;border-radius:10px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.04)}
+div[data-testid=stPlotlyChart]{background:#fff;border:1px solid #E6E1D1;border-radius:12px;padding:6px;box-shadow:0 2px 6px rgba(0,0,0,.04)}
+form[data-testid=stForm]{background:#fff;border:1px solid #E6E1D1;border-radius:12px}
+
+/* --- matrices --- */
 table.mx{border-collapse:separate;border-spacing:3px;width:100%}
-table.mx td{color:#fff;text-align:center;padding:8px;font-size:12px;border-radius:6px;min-width:90px}
+table.mx td{color:#fff;text-align:center;padding:8px;font-size:12px;border-radius:6px;min-width:90px;font-weight:600}
 table.mx th{font-size:12px;color:#2E3B47;padding:4px}
+.foot{text-align:center;color:#8A8A7A;font-size:.75rem;margin-top:30px;padding-top:12px;border-top:1px solid #E0DBC9}
 </style>""", unsafe_allow_html=True)
 
 
@@ -50,8 +101,9 @@ PAGES = ["Tableau de bord", "Registre des risques", "Matrices", "Priorisation", 
          "Plan d'actions", "Analyses statistiques", "Historique"]
 
 with st.sidebar:
-    st.markdown("### 🛡️ ORMVA-TF")
-    st.caption("Mode administrateur")
+    st.markdown("<div class='brand'><div class='logo'>🌴</div><div class='t'>ORMVA-TF</div>"
+                "<div class='s'>Risk &amp; Audit Center</div></div>", unsafe_allow_html=True)
+    st.caption("Session : administrateur")
     page = st.radio("Navigation", PAGES, label_visibility="collapsed")
     procs = sorted(df["processus_code"].unique(), key=lambda x: int(x[1:]))
     sel = st.multiselect("Processus (affichage)", procs, default=procs) or procs
@@ -73,7 +125,9 @@ def dl(frame, name):
     st.download_button("⬇️ Exporter (CSV pour Excel)", frame.to_csv(index=False).encode("utf-8-sig"), name, "text/csv")
 
 
-st.title(page)
+st.markdown(f"<div class='hero'><div><h1>{page}</h1>"
+            "<p>Office Régional de Mise en Valeur Agricole du Tafilalet · Audit interne &amp; gestion des risques</p></div>"
+            "<div class='tag'>🛡️ Cartographie des risques</div></div>", unsafe_allow_html=True)
 
 # ================= TABLEAU DE BORD =================
 if page == "Tableau de bord":
@@ -275,3 +329,5 @@ elif page == "Historique":
         h = h[h.apply(lambda r: s.lower() in " ".join(map(str, r.values)).lower(), axis=1)]
     st.dataframe(h, width="stretch", hide_index=True)
     dl(h, "historique.csv")
+
+st.markdown("<div class='foot'>ORMVA-TF · Risk &amp; Audit Center — outil d'aide à la décision, à utiliser avec le jugement de l'auditeur</div>", unsafe_allow_html=True)
