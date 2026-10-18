@@ -1,4 +1,5 @@
 """ORMVA-TF Risk & Audit Center — aide à la décision pour la priorisation des missions d'audit interne."""
+import hmac
 import sys
 from pathlib import Path
 
@@ -12,6 +13,33 @@ import streamlit as st
 from scipy import stats
 
 st.set_page_config(page_title="ORMVA-TF | Risk & Audit Center", page_icon="🛡️", layout="wide")
+
+
+# --------------------------------------------------------------------------------------
+# Protection par mot de passe (si APP_PASSWORD est défini dans les « Secrets » de Streamlit Cloud)
+# --------------------------------------------------------------------------------------
+def _password_ok():
+    try:
+        secret = str(st.secrets.get("APP_PASSWORD", ""))
+    except Exception:
+        secret = ""
+    if not secret:
+        return True  # aucun mot de passe configuré : accès libre (à éviter en production)
+    if st.session_state.get("auth"):
+        return True
+    st.markdown("### 🔒 ORMVA-TF · Risk & Audit Center")
+    pw = st.text_input("Mot de passe", type="password")
+    if pw:
+        if hmac.compare_digest(pw.encode(), secret.encode()):
+            st.session_state["auth"] = True
+            st.rerun()
+        else:
+            st.error("Mot de passe incorrect.")
+    return False
+
+
+if not _password_ok():
+    st.stop()
 
 try:
     import core
@@ -80,8 +108,10 @@ table.mx th{font-size:12px;color:#2E3B47;padding:4px}
 # --------------------------------------------------------------------------------------
 def show(fig, key):
     fig.update_layout(font=dict(family="Inter, sans-serif", color=INK), paper_bgcolor="#FFFFFF",
-                      plot_bgcolor="#FFFFFF", margin=dict(l=10, r=10, t=55, b=10),
+                      plot_bgcolor="#FFFFFF", margin=dict(l=70, r=15, t=55, b=40),
                       legend=dict(font=dict(color=INK)), title_font=dict(color="#0B3B2A", size=15))
+    fig.update_yaxes(automargin=True)
+    fig.update_xaxes(automargin=True)
     try:
         st.plotly_chart(fig, theme=None, width="stretch", key=key)
     except Exception:
@@ -97,6 +127,11 @@ def table(frame, **kw):
 
 def dl(frame, name):
     st.download_button("⬇️ Exporter (CSV pour Excel)", frame.to_csv(index=False).encode("utf-8-sig"), name, "text/csv")
+
+
+def fmt_p(p):
+    """p-value : jamais affichée comme 0 exact."""
+    return "< 0,001" if p < 0.001 else f"{p:.3f}".replace(".", ",")
 
 
 def matrix(cells, rows, cols, color, note):
@@ -168,6 +203,8 @@ if page == "Tableau de bord":
     c[3].metric("Criticité brute moy.", f"{R.criticite_brute.mean():.2f}")
     c[4].metric("DMR moyen", f"{R.dmr.mean():.2f}")
     c[5].metric("Actions ouvertes", int((act["statut"] != "Terminée").sum()) if len(act) else 0)
+    st.caption(f"Périmètre : {df.processus_code.nunique()} processus ({len(df)} risques). "
+               "Les 9 risques majeurs transversaux (groupe PM) ne sont pas intégrés au classement par processus.")
 
     top3 = SC_ALL.head(3)
     st.info("**Processus à auditer en priorité (score Sp) :** " + " · ".join(
@@ -180,7 +217,8 @@ if page == "Tableau de bord":
                     color_discrete_map={ZLABEL[z]: ZCOL[z] for z in ZONES}, title="Risques par zone"), "dash_pie")
     with b:
         show(px.bar(SC.sort_values("Score"), x="Score", y="processus_code", orientation="h",
-                    title="Score de priorité d'audit (Sp)", color_discrete_sequence=["#0F3D2E"]), "dash_bar")
+                    title="Score de priorité d'audit (Sp)", color_discrete_sequence=["#0F3D2E"],
+                    labels={"Score": "Score Sp (0-100)", "processus_code": "Processus"}), "dash_bar")
     st.markdown("#### Risques à traiter en premier (zone D, contrôle le plus faible)")
     table(R[R.zone == "D"].sort_values(["dmr", "criticite_brute"], ascending=[True, False])
           [["code", "processus_code", "intitule", "criticite_brute", "dmr"]].head(10))
@@ -213,7 +251,7 @@ elif page == "Registre des risques":
             e = st.columns(3)
             prob = e[0].select_slider("Probabilité", [1, 2, 3, 4], int(r.prob))
             grav = e[1].select_slider("Gravité", [1, 2, 3, 4], int(r.grav))
-            opts = [0.0, 0.25, 0.5, 0.75, 1.0]
+            opts = [0.25, 0.5, 0.75, 1.0]
             dmr = e[2].select_slider("DMR (degré de contrôle)", opts, min(opts, key=lambda o: abs(o - r.dmr)),
                                      format_func=lambda o: f"{o:.0%}")
             constat = st.text_area("Constat", r.constat)
@@ -223,8 +261,9 @@ elif page == "Registre des risques":
                                                 mesures_operatoires=mesures), ME)
                 st.toast(f"{n} champ(s) modifié(s) — criticité et zone recalculées" if n else "Aucun changement")
                 st.rerun()
-        st.caption("La criticité brute (probabilité × gravité) et la zone (grille 4×4 du document) sont recalculées "
-                   "à chaque modification de la probabilité, de la gravité ou du DMR. Tout est tracé dans l'historique.")
+        st.caption("La criticité brute (probabilité × gravité), la criticité nette (brute × DMR, formule du document) "
+                   "et la zone (grille 4×4 du document) sont recalculées à chaque modification de la probabilité, "
+                   "de la gravité ou du DMR. Tout est tracé dans l'historique.")
 
 # ======================================================================================
 # MATRICES
@@ -262,17 +301,23 @@ elif page == "Priorisation":
     with t1:
         st.code("Sp = 0,45·N(%Zone D) + 0,30·N(%Zone C) + 0,25·N(Criticité brute moyenne)   — N = min-max 0-100")
         show(px.bar(SC.sort_values("Score"), x="Score", y="processus_code", orientation="h", text="Score",
-                    color="Score", color_continuous_scale=["#DCE9DF", "#C0392B"]).update_layout(coloraxis_showscale=False),
-             "prio_bar")
-        tb = SC[["Rang", "processus_code", "processus_nom", "Score", "Nb_D", "Pct_D", "Pct_C", "Crit", "DMR", "Nb"]]
+                    color="Score", color_continuous_scale=["#DCE9DF", "#C0392B"],
+                    labels={"Score": "Score Sp (0-100)", "processus_code": "Processus"}
+                    ).update_layout(coloraxis_showscale=False), "prio_bar")
+        tb = SC[["Rang", "processus_code", "processus_nom", "Score", "Nb_D", "Pct_D", "Pct_C", "Crit", "DMR", "Nb"]].rename(
+            columns={"processus_code": "Code", "processus_nom": "Processus", "Score": "Score Sp", "Nb_D": "Nb zone D",
+                     "Pct_D": "% zone D", "Pct_C": "% zone C", "Crit": "Criticité brute moy.", "DMR": "DMR moy.",
+                     "Nb": "Nb risques"})
         table(tb)
         dl(tb, "classement_processus.csv")
         st.warning("Indicateur de priorité relative, pas une probabilité de survenance : il éclaire le jugement de l'auditeur.")
     with t2:
         m = SC.melt(id_vars="processus_code", value_vars=["contrib_D", "contrib_C", "contrib_brut"],
                     var_name="Composante", value_name="Points")
+        m["Composante"] = m["Composante"].map({"contrib_D": "Zone D", "contrib_C": "Zone C", "contrib_brut": "Criticité brute"})
         show(px.bar(m, x="Points", y="processus_code", color="Composante", orientation="h",
-                    color_discrete_map={"contrib_D": "#C0392B", "contrib_C": "#E08E45", "contrib_brut": "#0F3D2E"}), "prio_comp")
+                    labels={"processus_code": "Processus", "Points": "Points de score"},
+                    color_discrete_map={"Zone D": "#C0392B", "Zone C": "#E08E45", "Criticité brute": "#0F3D2E"}), "prio_comp")
         table(SC[["processus_code", "Pct_D", "N_D", "contrib_D", "Pct_C", "N_C", "contrib_C", "Crit", "N_brut",
                   "contrib_brut", "Score", "Rang"]].round(2))
     with t3:
@@ -283,7 +328,7 @@ elif page == "Priorisation":
             ranks[n] = rk
             if n != "Base":
                 rho, p = stats.spearmanr(base, rk)
-                rows.append({"Scénario": n, "Spearman ρ vs Base": round(float(rho), 3), "p-value": round(float(p), 5)})
+                rows.append({"Scénario": n, "Spearman ρ vs Base": round(float(rho), 3), "p-value": fmt_p(float(p))})
         st.markdown("**Stabilité du classement face à d'autres pondérations**")
         table(pd.DataFrame(rows))
         table(ranks.reset_index())
@@ -321,12 +366,12 @@ elif page == "Priorisation":
                 continue
             rk = pd.Series(range(1, len(o) + 1), index=o).reindex(base.index)
             rho, p = stats.spearmanr(base, rk)
-            sp_rows.append({"Méthode": n, "Spearman ρ vs Sp": round(float(rho), 3), "p-value": round(float(p), 5)})
+            sp_rows.append({"Méthode": n, "Spearman ρ vs Sp": round(float(rho), 3), "p-value": fmt_p(float(p))})
         table(pd.DataFrame(sp_rows))
         st.caption("Lecture : classer par nombre de risques D maximise la couverture de D par construction, mais "
-                   "favorise les gros processus. L'intérêt de Sp est de couvrir les risques D avec une charge d'audit "
-                   "plus faible tout en intégrant la zone C et la criticité. Une courbe au-dessus de la diagonale "
-                   "indique un gain par rapport à un choix au hasard.")
+                   "favorise les gros processus. Sp intègre en plus la zone C et la criticité brute moyenne, en "
+                   "proportion. Cette comparaison ne constitue pas une validation externe du classement : elle ne "
+                   "remplace ni l'avis d'experts ni le retour d'expérience de la cellule d'audit interne.")
 
 # ======================================================================================
 # PLAN D'AUDIT
@@ -391,7 +436,7 @@ elif page == "Plan d'actions":
 # ANALYSES STATISTIQUES
 # ======================================================================================
 elif page == "Analyses statistiques":
-    t1, t2, t3 = st.tabs(["ANOVA / Kruskal-Wallis", "Cohérence & régression", "Segmentation K-Means / ACP"])
+    t1, t2, t3 = st.tabs(["ANOVA / Kruskal-Wallis", "Cohérence de la criticité nette", "Segmentation K-Means / ACP"])
     with t1:
         g = [x.criticite_brute.values for _, x in R.groupby("processus_code") if len(x) > 1]
         if len(g) >= 2 and any(np.ptp(x) > 0 for x in g):
@@ -399,13 +444,16 @@ elif page == "Analyses statistiques":
             H, pk = stats.kruskal(*g)
             c = st.columns(4)
             c[0].metric("ANOVA F", f"{F:.2f}")
-            c[1].metric("p-value", f"{p:.5f}")
+            c[1].metric("p-value", fmt_p(p))
             c[2].metric("Kruskal-Wallis H", f"{H:.2f}")
-            c[3].metric("p-value", f"{pk:.5f}")
+            c[3].metric("p-value", fmt_p(pk))
             show(px.box(R, x="processus_code", y="criticite_brute", color="processus_code",
+                        labels={"processus_code": "Processus", "criticite_brute": "Criticité brute"},
                         title="Criticité brute par processus").update_layout(showlegend=False), "an_box")
-            st.caption("Une p-value < 0,05 indique que la criticité brute diffère significativement d'un processus à l'autre, "
-                       "ce qui justifie une priorisation par processus.")
+            st.caption(f"Groupes comparés : {len(g)} processus ({len(R)} risques affichés). Le rapport compare les "
+                       "4 fonctions (opérationnel, support, management, transversal) sur 168 risques, d'où des "
+                       "statistiques différentes. Une p-value < 0,05 indique que la criticité brute diffère "
+                       "significativement d'un groupe à l'autre, ce qui justifie une priorisation différenciée.")
         else:
             st.warning("Sélectionne au moins deux processus comportant plusieurs risques.")
     with t2:
@@ -418,24 +466,18 @@ elif page == "Analyses statistiques":
             rows.append({"Variable": lb, "Spearman ρ vs sévérité zone": round(float(rho), 3)})
         table(pd.DataFrame(rows))
         st.caption("Le document calcule la criticité nette comme brute × DMR ; cette formule augmente avec le contrôle. "
-                   "La version diagnostique brute × (1−DMR) diminue avec le contrôle.")
-        mm = R[["criticite_nette", "criticite_nette_predite"]].dropna()
-        if len(mm) > 2 and mm["criticite_nette"].var() > 0:
-            y, yp = mm["criticite_nette"], mm["criticite_nette_predite"]
-            st.metric("R² criticité nette déclarée vs prédite (modèle du notebook)",
-                      f"{1 - ((y - yp) ** 2).sum() / ((y - y.mean()) ** 2).sum():.3f}")
-            show(px.scatter(R.dropna(subset=["criticite_nette_predite"]), x="criticite_nette_predite", y="criticite_nette",
-                            color="zone", color_discrete_map=ZCOL, hover_data=["code"],
-                            title="Criticité nette : déclarée vs prédite"), "an_sc")
-        else:
-            st.info("Valeurs prédites du notebook non disponibles : fournis `cartographie_analysee_complete.xlsx` dans `data/`.")
+                   "La version diagnostique brute × (1−DMR) diminue avec le contrôle. Ce diagnostic mesure la cohérence "
+                   "de chaque formule avec la logique des zones ; il ne remet pas en cause le référentiel de l'Office.")
     with t3:
         if R["pca1"].notna().any():
             st.caption("Clusters et coordonnées ACP issus du notebook : figés, non recalculés après modification d'un risque.")
             show(px.scatter(R.dropna(subset=["pca1", "pca2"]), x="pca1", y="pca2", color="cluster_label",
-                            hover_data=["code", "zone"], title="Segmentation des risques (ACP)"), "an_pca")
+                            hover_data=["code", "zone"], title="Segmentation des risques (ACP)",
+                            labels={"pca1": "Composante 1", "pca2": "Composante 2", "cluster_label": "Profil"}), "an_pca")
             table(R.groupby("cluster_label").agg(Nb=("code", "count"), Prob=("prob", "mean"), Grav=("grav", "mean"),
-                                                 DMR=("dmr", "mean"), Crit=("criticite_brute", "mean")).round(2).reset_index())
+                                                 DMR=("dmr", "mean"), Crit=("criticite_brute", "mean")).round(2)
+                  .reset_index().rename(columns={"cluster_label": "Profil", "Nb": "Nb risques", "Prob": "Prob. moy.",
+                                                 "Grav": "Grav. moy.", "DMR": "DMR moy.", "Crit": "Crit. brute moy."}))
         else:
             st.info("Clusters non disponibles : fournis `cartographie_analysee_complete.xlsx` dans `data/`.")
 
@@ -464,12 +506,14 @@ elif page == "Historique":
 # ======================================================================================
 elif page == "Méthodologie":
     st.markdown("#### Source des données")
-    st.write("Cartographie des risques de l'ORMVA-TF (étude Thermis Engineering, 2024) : 159 risques répartis sur 12 processus. "
-             "Les 9 risques transversaux (RM) sont exclus du périmètre de priorisation par processus.")
+    st.write("Cartographie des risques de l'ORMVA-TF (version V2 du 20-12-2024) : 159 risques répartis sur 12 processus. "
+             "Les 9 risques majeurs transversaux (codes RM, groupe PM) sont exclus du périmètre de priorisation par "
+             "processus ; le rapport et le notebook portent sur l'ensemble des 168 risques.")
     st.markdown("#### Évaluation des risques")
     st.write("Criticité brute = probabilité (1-4) × gravité (1-4), soit de 1 à 16. Le DMR est le degré de contrôle "
              "(≤25 %, ≤50 %, ≤75 %, ≤100 %). La zone résulte de la grille 4×4 ci-dessous, reconstituée à partir des "
-             "matrices du document ; elle reproduit les zones officielles du document pour l'ensemble des 168 risques.")
+             "matrices du document ; elle reproduit les zones officielles du document pour l'ensemble des 168 risques "
+             "(159 dans cette application).")
     zone_legend()
     matrix({}, core.CTRL_LABELS[::-1], core.CRIT_LABELS, lambda i, j: ZCOL[core.GRID[3 - i][j]],
            "Degré de criticité brute → · Degré de contrôle ↑")
@@ -486,7 +530,9 @@ elif page == "Méthodologie":
              "auditeurs internes reste nécessaire.\n"
              "- La case (contrôle satisfaisant, criticité faible) de la grille n'est pas renseignée dans le document ; "
              "elle est rattachée à la zone A.\n"
-             "- Dans le document, la criticité nette est calculée comme brute × DMR, formule qui augmente avec le contrôle.")
+             "- Dans le document, la criticité nette est calculée comme brute × DMR, formule qui augmente avec le contrôle.\n"
+             "- Prototype : l'authentification et la persistance des données doivent être renforcées avant tout usage "
+             "institutionnel.")
 
 st.markdown("<div class='foot'>ORMVA-TF · Risk &amp; Audit Center — outil d'aide à la décision, à utiliser avec le jugement de l'auditeur</div>",
             unsafe_allow_html=True)
