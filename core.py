@@ -49,6 +49,17 @@ SCENARIOS = {
     "Équilibre": {"D": 1 / 3, "C": 1 / 3, "brut": 1 / 3},
 }
 
+# Libellés des profils (clusters) : correction des accents.
+# À activer après vérification dans l'onglet « Segmentation K-Means / ACP » :
+# le profil au libellé « Mineurs » a-t-il Prob ≈ 1,6 et Grav ≈ 3,5 ? Si oui, il s'agit de risques
+# graves mais peu probables, et le libellé « Mineurs » est trompeur.
+CLUSTER_LABELS_FIX = {
+    "Negliges": "Négligés",
+    "Sous controle": "Sous contrôle",
+    "Critiques non maitrises": "Critiques non maîtrisés",
+    # "Mineurs": "Graves mais peu probables",
+}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, auteur TEXT, obj TEXT, champ TEXT, ancien TEXT, nouveau TEXT);
 CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, action TEXT, responsable TEXT, echeance TEXT, statut TEXT, maj TEXT);
@@ -129,7 +140,7 @@ def _load_sources():
     e = pd.read_excel(_find("data_reel_avec_rm.xlsx"), engine="openpyxl")
     e = e.rename(columns={"criticite_brute_declaree": "criticite_brute",
                           "criticite_nette_declaree": "criticite_nette"})
-    # périmètre = 159 risques de processus ; les 9 risques transversaux (RM) sont exclus
+    # périmètre = 159 risques de processus ; les 9 risques majeurs transversaux (codes RM, groupe PM) sont exclus
     e = e[~e["code"].astype(str).str.startswith("RM") & (e["processus_code"].astype(str) != "PM")]
     try:
         a = pd.read_excel(_find("cartographie_analysee_complete.xlsx"), sheet_name="Details_Risques", engine="openpyxl")
@@ -141,8 +152,7 @@ def _load_sources():
 def _build_risks():
     e, a = _load_sources()
     if a is not None:
-        a = a.rename(columns={"Criticite_Nette_Predite": "criticite_nette_predite", "Residu": "residu",
-                              "Cluster_Label": "cluster_label", "PCA1": "pca1", "PCA2": "pca2"})
+        a = a.rename(columns={"Cluster_Label": "cluster_label", "PCA1": "pca1", "PCA2": "pca2"})
         extra = {c: c + "_e" for c in e.columns if c != "code" and c in a.columns}
         df = a.merge(e.rename(columns=extra), on="code", how="left")
         for c, c2 in extra.items():
@@ -178,12 +188,13 @@ def _build_risks():
         if c not in df.columns:
             df[c] = default
         df[c] = df[c].fillna(default).astype(str)
-    for c in ["criticite_nette_predite", "residu", "pca1", "pca2"]:
+    df["cluster_label"] = df["cluster_label"].replace(CLUSTER_LABELS_FIX)
+    for c in ["pca1", "pca2"]:
         df[c] = pd.to_numeric(df[c] if c in df.columns else np.nan, errors="coerce")
 
     cols = ["code", "processus_code", "processus_nom", "fonction", "sous_processus", "intitule", "prob", "grav",
             "criticite_brute", "dmr", "criticite_nette", "zone", "zone_source", "constat", "mesures_operatoires",
-            "cluster_label", "criticite_nette_predite", "residu", "pca1", "pca2"]
+            "cluster_label", "pca1", "pca2"]
     return df[cols]
 
 
@@ -241,6 +252,8 @@ def update_risk(code, new, auteur):
     if not all(_same(old[k], new[k]) for k in ("prob", "grav", "dmr")):
         new["zone"] = zone_of(new["criticite_brute"], new["dmr"])
         new["zone_source"] = "recalculée"
+        # criticité nette au sens du document (brute × DMR), recalculée avec le reste
+        new["criticite_nette"] = new["criticite_brute"] * new["dmr"]
     n = 0
     for k, v in new.items():
         if not _same(old[k], v):
