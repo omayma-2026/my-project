@@ -183,6 +183,13 @@ with st.sidebar:
     procs = sorted(df["processus_code"].unique(), key=proc_key)
     sel = st.multiselect("Processus (affichage)", procs, default=procs) or procs
     st.caption("Le filtre n'agit que sur l'affichage ; les scores sont toujours calculés sur l'ensemble des processus.")
+    
+if st.sidebar.button("Synchroniser les données Excel"):
+    core.reset_risks()
+    st.cache_resource.clear()
+    st.success("Données Excel importées dans SQLite.")
+    st.rerun()
+
 
 R = df[df["processus_code"].isin(sel)]
 SC = SC_ALL[SC_ALL["processus_code"].isin(sel)]
