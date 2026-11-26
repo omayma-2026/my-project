@@ -22,10 +22,10 @@ ZONES = ["A", "B", "C", "D"]
 
 ZSEV = {"A": 1, "B": 2, "C": 3, "D": 4}
 ZCOL = {
-    "A": "#2E7D4F",
-    "B": "#D9A441",
-    "C": "#E08E45",
-    "D": "#C0392B"
+    "A": "#2E7D4F",  # Vert : risque faible
+    "B": "#F1C40F",  # Jaune : risque modéré
+    "C": "#E67E22",  # Orange : risque élevé
+    "D": "#C0392B",  # Rouge : risque très élevé
 }
 ZNAME = {
     "A": "Optimisation",
