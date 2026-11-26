@@ -184,7 +184,7 @@ def _build_risks():
         if c not in df.columns:
             df[c] = default
         df[c] = df[c].fillna(default).astype(str)
-    df["cluster_label"] = df["cluster_label"].replace(CLUSTER_LABELS_FIX)
+    
     for c in ["pca1", "pca2"]:
         df[c] = pd.to_numeric(df[c] if c in df.columns else np.nan, errors="coerce")
 
