@@ -53,12 +53,7 @@ SCENARIOS = {
 # À activer après vérification dans l'onglet « Segmentation K-Means / ACP » :
 # le profil au libellé « Mineurs » a-t-il Prob ≈ 1,6 et Grav ≈ 3,5 ? Si oui, il s'agit de risques
 # graves mais peu probables, et le libellé « Mineurs » est trompeur.
-CLUSTER_LABELS_FIX = {
-    "Negliges": "Négligés",
-    "Sous controle": "Sous contrôle",
-    "Critiques non maitrises": "Critiques non maîtrisés",
-     "Mineurs": "Graves mais peu probables",
-}
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, auteur TEXT, obj TEXT, champ TEXT, ancien TEXT, nouveau TEXT);
