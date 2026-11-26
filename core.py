@@ -155,6 +155,7 @@ def _build_risks():
             df = df.drop(columns=c2)
     else:
         df = e.copy()
+        str.startswith("RM")
 
     if "processus" in df.columns:
         p = df["processus"].astype(str).str.extract(r"^(P\d+)\s*-\s*(.*)$")
