@@ -57,7 +57,7 @@ CLUSTER_LABELS_FIX = {
     "Negliges": "Négligés",
     "Sous controle": "Sous contrôle",
     "Critiques non maitrises": "Critiques non maîtrisés",
-    # "Mineurs": "Graves mais peu probables",
+     "Mineurs": "Graves mais peu probables",
 }
 
 SCHEMA = """
