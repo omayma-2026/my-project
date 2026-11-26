@@ -131,16 +131,41 @@ def _find(name):
     raise FileNotFoundError(f"{name} introuvable (place-le dans le dossier data/).")
 
 
+
 def _load_sources():
-    e = pd.read_excel(_find("data_reel_avec_rm.xlsx"), engine="openpyxl")
-    e = e.rename(columns={"criticite_brute_declaree": "criticite_brute",
-                          "criticite_nette_declaree": "criticite_nette"})
-    # périmètre = 159 risques de processus ; les 9 risques majeurs transversaux (codes RM, groupe PM) sont exclus
-    e = e[~e["code"].astype(str).str.startswith("RM") & (e["processus_code"].astype(str) != "PM")]
-    try:
-        a = pd.read_excel(_find("cartographie_analysee_complete.xlsx"), sheet_name="Details_Risques", engine="openpyxl")
-    except (FileNotFoundError, ValueError):
-        a = None
+    e = pd.read_excel(
+        _find("data_reel_avec_rm.xlsx"),
+        engine="openpyxl"
+    )
+
+    e = e.rename(columns={
+        "criticite_brute_declaree": "criticite_brute",
+        "criticite_nette_declaree": "criticite_nette"
+    })
+
+    e["code"] = e["code"].astype(str).str.strip()
+
+    # Exclure les risques RM et le processus PM
+    e = e[
+        ~e["code"].str.startswith("RM") &
+        (e["processus_code"].astype(str) != "PM")
+    ].copy()
+
+    # Fichier Excel final issu de Google Colab
+    a = pd.read_excel(
+        _find("cartographie_analysee_complete.xlsx"),
+        sheet_name="Details_Risques",
+        engine="openpyxl"
+    )
+
+    a = a.rename(columns={
+        "Cluster_Label": "cluster_label",
+        "PCA1": "pca1",
+        "PCA2": "pca2"
+    })
+
+    a["code"] = a["code"].astype(str).str.strip()
+
     return e, a
 
 
