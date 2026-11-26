@@ -175,6 +175,35 @@ def _build_risks():
         a = a.rename(columns={"Cluster_Label": "cluster_label", "PCA1": "pca1", "PCA2": "pca2"})
         extra = {c: c + "_e" for c in e.columns if c != "code" and c in a.columns}
         df = a.merge(e.rename(columns=extra), on="code", how="left")
+        
+# Vérification de la correspondance entre les deux fichiers
+if df["processus_code"].isna().any():
+    raise ValueError(
+        "Certains codes du fichier d'analyse "
+        "ne correspondent pas au fichier source."
+    )
+
+# Exclusion définitive des risques RM et PM
+df = df[
+    ~df["code"].astype(str).str.startswith("RM") &
+    (df["processus_code"].astype(str) != "PM")
+].copy()
+
+# Vérification des résultats K-Means et ACP
+if df["cluster_label"].isna().any():
+    raise ValueError("Des clusters sont manquants dans le fichier Excel.")
+
+if df[["pca1", "pca2"]].isna().any().any():
+    raise ValueError("Des coordonnées PCA sont manquantes.")
+
+if df["code"].duplicated().any():
+    raise ValueError("Des codes de risques sont dupliqués.")
+
+if len(df) != 159:
+    raise ValueError(
+        f"Nombre de risques incorrect : {len(df)} au lieu de 159."
+    )
+
         for c, c2 in extra.items():
             df[c] = df[c].where(df[c].notna(), df[c2])
             df = df.drop(columns=c2)
